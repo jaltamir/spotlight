@@ -1,0 +1,40 @@
+# spotlight.yaml — Example configuration
+
+time_window: "24h"  # How far back to look
+
+connectors:
+  - name: newrelic
+    enabled: true
+    api_key: "${NEWRELIC_API_KEY}"
+    account_id: "${NEWRELIC_ACCOUNT_ID}"
+    # APMs to monitor — loaded from env var (comma-separated)
+    applications:
+      - "${NEWRELIC_APMS}"  # e.g. NEWRELIC_APMS="ms-hubspot-integration, payments-service"
+
+  - name: hubspot
+    enabled: true
+    api_key: "${HUBSPOT_API_KEY}"
+
+outputs:
+  - name: json
+    enabled: true
+    path: "./reports"
+
+  - name: html
+    enabled: true
+    path: "./reports"
+
+  - name: s3
+    enabled: false
+    s3:
+      bucket: "my-spotlight-reports"
+      region: "eu-west-1"
+      access_key: "${AWS_ACCESS_KEY_ID}"
+      secret_key: "${AWS_SECRET_ACCESS_KEY}"
+      prefix: "reports/"
+      retain_last: 30
+
+llm:
+  enabled: false
+  api_key: "${ANTHROPIC_API_KEY}"
+  model: "claude-sonnet-4-6"

@@ -1,0 +1,7 @@
+/spotlight
+spotlight.yaml
+.env
+tmp.txt
+reports/
+*.json
+!spotlight.yaml.dist
