@@ -15,30 +15,52 @@ import (
 	"github.com/jaltamir/spotlight/internal/version"
 )
 
-const defaultAnthropicAPI = "https://api.anthropic.com/v1/messages"
+const (
+	defaultAnthropicURL = "https://api.anthropic.com/v1/messages"
+	defaultOpenAIURL    = "https://api.openai.com/v1/chat/completions"
+)
 
-// Analyzer sends grouped reports to the Claude API for analysis.
+// Analyzer sends grouped reports to an LLM API for analysis.
+// It implements the enricher.Enricher interface.
 type Analyzer struct {
 	baseURL string
 	client  *http.Client
+	cfg     config.LLMConfig
 }
 
-// New returns an Analyzer with default settings.
-func New() *Analyzer {
+// New returns an Analyzer configured with the given LLM settings.
+func New(cfg config.LLMConfig) *Analyzer {
+	base := cfg.BaseURL
+	if base == "" {
+		switch cfg.Provider {
+		case "openai":
+			base = defaultOpenAIURL
+		default:
+			base = defaultAnthropicURL
+		}
+	}
 	return &Analyzer{
-		baseURL: defaultAnthropicAPI,
+		baseURL: base,
 		client:  httpclient.NewClient(120 * time.Second),
+		cfg:     cfg,
 	}
 }
 
-// Analyze sends the grouped report to Claude API and returns the analysis text.
-// This package-level function is kept for backwards compatibility with main.go.
-func Analyze(ctx context.Context, report *aggregator.Report, cfg config.LLMConfig) (string, error) {
-	return New().Analyze(ctx, report, cfg)
+// Name implements enricher.Enricher.
+func (a *Analyzer) Name() string { return "llm" }
+
+// Enrich implements enricher.Enricher. It calls the LLM API and
+// sets report.Analysis.
+func (a *Analyzer) Enrich(ctx context.Context, report *aggregator.Report) error {
+	text, err := a.analyze(ctx, report)
+	if err != nil {
+		return err
+	}
+	report.Analysis = &text
+	return nil
 }
 
-// Analyze sends the grouped report to Claude API and returns the analysis text.
-func (a *Analyzer) Analyze(ctx context.Context, report *aggregator.Report, cfg config.LLMConfig) (string, error) {
+func (a *Analyzer) analyze(ctx context.Context, report *aggregator.Report) (string, error) {
 	reportJSON, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("marshaling report: %w", err)
@@ -52,13 +74,7 @@ func (a *Analyzer) Analyze(ctx context.Context, report *aggregator.Report, cfg c
 		report.TimeWindow, string(reportJSON),
 	)
 
-	body, err := json.Marshal(map[string]any{
-		"model":      cfg.Model,
-		"max_tokens": 4096,
-		"messages": []map[string]string{
-			{"role": "user", "content": prompt},
-		},
-	})
+	body, err := a.buildRequestBody(prompt)
 	if err != nil {
 		return "", fmt.Errorf("building request: %w", err)
 	}
@@ -67,14 +83,11 @@ func (a *Analyzer) Analyze(ctx context.Context, report *aggregator.Report, cfg c
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", cfg.APIKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("User-Agent", version.UserAgent())
+	a.setHeaders(req)
 
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("calling claude api: %w", err)
+		return "", fmt.Errorf("calling llm api: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -84,23 +97,75 @@ func (a *Analyzer) Analyze(ctx context.Context, report *aggregator.Report, cfg c
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("claude api returned %d: %s", resp.StatusCode, truncate(string(respBody), 200))
+		return "", fmt.Errorf("llm api returned %d: %s", resp.StatusCode, truncate(string(respBody), 200))
 	}
 
+	return a.parseResponse(respBody)
+}
+
+func (a *Analyzer) buildRequestBody(prompt string) ([]byte, error) {
+	payload := map[string]any{
+		"model":      a.cfg.Model,
+		"max_tokens": 4096,
+		"messages": []map[string]string{
+			{"role": "user", "content": prompt},
+		},
+	}
+	return json.Marshal(payload)
+}
+
+func (a *Analyzer) setHeaders(req *http.Request) {
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", version.UserAgent())
+
+	switch a.cfg.Provider {
+	case "openai":
+		req.Header.Set("Authorization", "Bearer "+a.cfg.APIKey)
+	default: // anthropic
+		req.Header.Set("x-api-key", a.cfg.APIKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+	}
+}
+
+func (a *Analyzer) parseResponse(body []byte) (string, error) {
+	switch a.cfg.Provider {
+	case "openai":
+		return parseOpenAIResponse(body)
+	default:
+		return parseAnthropicResponse(body)
+	}
+}
+
+func parseAnthropicResponse(body []byte) (string, error) {
 	var result struct {
 		Content []struct {
 			Text string `json:"text"`
 		} `json:"content"`
 	}
-	if err := json.Unmarshal(respBody, &result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		return "", fmt.Errorf("parsing response: %w", err)
 	}
-
 	if len(result.Content) == 0 {
-		return "", fmt.Errorf("empty response from claude api")
+		return "", fmt.Errorf("empty response from llm api")
 	}
-
 	return result.Content[0].Text, nil
+}
+
+func parseOpenAIResponse(body []byte) (string, error) {
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("parsing response: %w", err)
+	}
+	if len(result.Choices) == 0 {
+		return "", fmt.Errorf("empty response from llm api")
+	}
+	return result.Choices[0].Message.Content, nil
 }
 
 func truncate(s string, max int) string {

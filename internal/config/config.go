@@ -13,8 +13,14 @@ import (
 type Config struct {
 	TimeWindow string            `yaml:"time_window"`
 	Connectors []ConnectorConfig `yaml:"connectors"`
+	Enrichers  []EnricherConfig  `yaml:"enrichers"`
 	Outputs    []OutputConfig    `yaml:"outputs"`
 	LLM        LLMConfig         `yaml:"llm"`
+}
+
+type EnricherConfig struct {
+	Name    string `yaml:"name"`
+	Enabled bool   `yaml:"enabled"`
 }
 
 type ConnectorConfig struct {
@@ -43,10 +49,10 @@ type S3Config struct {
 }
 
 type LLMConfig struct {
-	Enabled  bool   `yaml:"enabled"`
 	Provider string `yaml:"provider"`
 	APIKey   string `yaml:"api_key"`
 	Model    string `yaml:"model"`
+	BaseURL  string `yaml:"base_url"`
 }
 
 var envVarPattern = regexp.MustCompile(`\$\{([^}]+)\}`)
@@ -67,6 +73,9 @@ func Load(path string) (*Config, error) {
 
 	if cfg.TimeWindow == "" {
 		cfg.TimeWindow = "24h"
+	}
+	if cfg.LLM.Provider == "" {
+		cfg.LLM.Provider = "anthropic"
 	}
 	if cfg.LLM.Model == "" {
 		cfg.LLM.Model = "claude-sonnet-4-6"
@@ -139,8 +148,18 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("at least one output must be enabled")
 	}
 
-	if c.LLM.Enabled && c.LLM.APIKey == "" {
-		return fmt.Errorf("llm.enabled requires llm.api_key")
+	for _, ec := range c.Enrichers {
+		if !ec.Enabled {
+			continue
+		}
+		if ec.Name == "llm" {
+			if c.LLM.APIKey == "" {
+				return fmt.Errorf("enricher llm: api_key is required in llm config")
+			}
+			if c.LLM.Provider != "anthropic" && c.LLM.Provider != "openai" {
+				return fmt.Errorf("enricher llm: unknown provider %q (expected \"anthropic\" or \"openai\")", c.LLM.Provider)
+			}
+		}
 	}
 
 	return nil

@@ -4,25 +4,23 @@ CLI tool that connects to your APMs and integrations, groups errors by pattern, 
 
 ## What it does
 
-Spotlight collects errors from multiple data sources in parallel, groups them by pattern (source, service, endpoint, error type), calculates trends against the previous time window, and outputs structured reports. Optionally, it can send the grouped results to Claude's API for AI-powered root cause analysis.
+Spotlight collects errors from multiple data sources in parallel, groups them by pattern (source, service, endpoint, error type), calculates trends against the previous time window, and outputs structured reports. Optionally, enrichers can transform the report before output — for example, sending it to an LLM (Claude or OpenAI) for AI-powered root cause analysis.
 
 ## Architecture
 
 ```
-Input connectors            Aggregator            Output writers
-┌──────────┐                                      ┌──────┐
-│ newrelic  │──┐                              ┌──▶ │ json │
-└──────────┘  │    ┌─────────────────┐        │    └──────┘
-              ├──▶ │ group + rank by │ ──────▶ ├──▶ ┌──────┐
-┌──────────┐  │    │ impact score    │        │    │ html │
-│ hubspot  │──┘    └─────────────────┘        │    └──────┘
-└──────────┘                                  ├──▶ ┌──────┐
-                                              │    │  s3  │
-                                              │    └──────┘
-                                              └──▶ (slack, llm, ...)
+Connectors          Aggregator          Enrichers         Writers
+
+┌─────────────┐                                        ┌─────────────┐
+│  newrelic   │─┐   ┌──────────────┐   ┌───────────┐  │    json     │
+└─────────────┘ ├──▶│ group + rank │──▶│    llm    │──▶├─────────────┤
+┌─────────────┐ │   │ by impact    │   ├───────────┤  │    html     │
+│   hubspot   │─┘   └──────────────┘   │  dedup, … │  ├─────────────┤
+└─────────────┘                        └───────────┘  │     s3      │
+                                                      └─────────────┘
 ```
 
-Both input connectors and output writers implement a simple interface and are configured in `spotlight.yaml`.
+Connectors, enrichers, and writers each implement a simple interface and are configured in `spotlight.yaml`. The pipeline runs sequentially: **collect → aggregate → enrich → write**.
 
 ## Quick start
 
@@ -54,7 +52,7 @@ EOF
 -c, --config string   Path to config file (default "spotlight.yaml")
 -d, --days int        Number of days to look back (overrides window)
 -w, --window string   Override time window (e.g. 12h)
-    --analyze         Run AI analysis on grouped errors
+    --debug           Enable structured debug logging
 ```
 
 ## Configuration
@@ -77,6 +75,11 @@ connectors:
     enabled: true
     api_key: "${HUBSPOT_API_KEY}"
 
+# --- Enrichers (run between aggregation and output) ---
+enrichers:
+  - name: llm
+    enabled: false
+
 # --- Output writers ---
 outputs:
   - name: json
@@ -97,11 +100,12 @@ outputs:
       prefix: "reports/"
       retain_last: 30
 
-# --- Optional AI analysis ---
+# --- LLM settings (used by the llm enricher) ---
 llm:
-  enabled: false
+  provider: "anthropic"   # "anthropic" | "openai"
   api_key: "${ANTHROPIC_API_KEY}"
   model: "claude-sonnet-4-6"
+  # base_url: ""          # optional: custom endpoint (Azure, proxy, ollama)
 ```
 
 The `.env` file is loaded automatically via [godotenv](https://github.com/joho/godotenv). Existing env vars take precedence.
@@ -134,6 +138,27 @@ The HubSpot Private App token needs these scopes:
 | **s3** | Uploads JSON to S3 with timestamped key and optional retention pruning |
 
 The output directory is cleaned at the start of each run.
+
+## Enrichers
+
+Enrichers run between aggregation and output, transforming the report in place.
+
+| Enricher | What it does |
+|----------|-------------|
+| **llm** | Sends the grouped report to an LLM API (Anthropic or OpenAI) for root cause analysis |
+
+## Adding a new enricher
+
+Implement the `Enricher` interface:
+
+```go
+type Enricher interface {
+    Name() string
+    Enrich(ctx context.Context, report *aggregator.Report) error
+}
+```
+
+Register it in `buildEnrichers()` in `cmd/spotlight/main.go`.
 
 ## Adding a new input connector
 
@@ -194,14 +219,14 @@ Groups are sorted by impact score: `count * trend_weight` (rising=3, stable=1, f
 
 ## AI analysis
 
-The `--analyze` flag (or `llm.enabled: true`) sends the grouped report to Claude's API for interpretation. Requires `ANTHROPIC_API_KEY`. The model defaults to `claude-sonnet-4-6`.
+Enable the `llm` enricher in the `enrichers:` section to send the grouped report to an LLM for interpretation. Supports both Anthropic (Claude) and OpenAI. Configure the provider, API key, and model in the `llm:` section. Defaults to Anthropic with `claude-sonnet-4-6`.
 
 ## Project structure
 
 ```
 spotlight/
 ├── cmd/spotlight/
-│   └── main.go              # CLI, connector/writer orchestration
+│   └── main.go              # CLI, pipeline orchestration
 ├── internal/
 │   ├── config/              # YAML parsing, env expansion
 │   ├── connector/
@@ -209,12 +234,18 @@ spotlight/
 │   │   ├── newrelic/        # New Relic NerdGraph connector
 │   │   └── hubspot/         # HubSpot CRM/audit/usage connector
 │   ├── aggregator/          # Grouping, trend calculation, ranking
-│   ├── analyzer/            # Claude API integration
+│   ├── enricher/
+│   │   └── enricher.go      # Enricher interface
+│   ├── analyzer/            # LLM enricher (Anthropic + OpenAI)
+│   ├── httpclient/          # HTTP client with retry + backoff
+│   ├── log/                 # Hybrid logging facade
+│   ├── version/             # Build version injection
 │   └── output/
 │       ├── writer.go        # Writer interface
 │       ├── json.go          # JSON output
 │       ├── html.go          # HTML report
 │       └── s3.go            # S3 upload
+├── Makefile                 # Build with ldflags, test, clean
 ├── spotlight.yaml.dist      # Example config (versioned)
 ├── .env                     # API keys (gitignored)
 └── spotlight.yaml           # Local config (gitignored)

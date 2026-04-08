@@ -87,11 +87,30 @@ func TestValidateInvalidTimeWindow(t *testing.T) {
 	}
 }
 
-func TestValidateLLMEnabledWithoutKey(t *testing.T) {
+func TestValidateLLMEnricherWithoutKey(t *testing.T) {
 	cfg := validConfig()
-	cfg.LLM = LLMConfig{Enabled: true, APIKey: ""}
+	cfg.Enrichers = []EnricherConfig{{Name: "llm", Enabled: true}}
+	cfg.LLM = LLMConfig{Provider: "anthropic", APIKey: ""}
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for llm.enabled without api_key")
+		t.Fatal("expected error for llm enricher without api_key")
+	}
+}
+
+func TestValidateLLMEnricherUnknownProvider(t *testing.T) {
+	cfg := validConfig()
+	cfg.Enrichers = []EnricherConfig{{Name: "llm", Enabled: true}}
+	cfg.LLM = LLMConfig{Provider: "gemini", APIKey: "key"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for unknown provider")
+	}
+}
+
+func TestValidateLLMEnricherValid(t *testing.T) {
+	cfg := validConfig()
+	cfg.Enrichers = []EnricherConfig{{Name: "llm", Enabled: true}}
+	cfg.LLM = LLMConfig{Provider: "openai", APIKey: "key", Model: "gpt-4o"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
 	}
 }
 
@@ -111,6 +130,9 @@ connectors:
   - name: hubspot
     enabled: false
     api_key: "hs-key"
+enrichers:
+  - name: llm
+    enabled: true
 outputs:
   - name: json
     enabled: true
@@ -118,7 +140,6 @@ outputs:
   - name: html
     enabled: false
 llm:
-  enabled: true
   api_key: "llm-key"
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -144,6 +165,12 @@ llm:
 	}
 	if cfg.LLM.Model != "claude-sonnet-4-6" {
 		t.Errorf("expected default model claude-sonnet-4-6, got %s", cfg.LLM.Model)
+	}
+	if cfg.LLM.Provider != "anthropic" {
+		t.Errorf("expected default provider=anthropic, got %s", cfg.LLM.Provider)
+	}
+	if len(cfg.Enrichers) != 1 || cfg.Enrichers[0].Name != "llm" || !cfg.Enrichers[0].Enabled {
+		t.Errorf("expected 1 enabled llm enricher, got %v", cfg.Enrichers)
 	}
 }
 

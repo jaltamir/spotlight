@@ -17,6 +17,7 @@ import (
 	"github.com/jaltamir/spotlight/internal/connector"
 	"github.com/jaltamir/spotlight/internal/connector/hubspot"
 	"github.com/jaltamir/spotlight/internal/connector/newrelic"
+	"github.com/jaltamir/spotlight/internal/enricher"
 	"github.com/jaltamir/spotlight/internal/log"
 	"github.com/jaltamir/spotlight/internal/output"
 	"github.com/jaltamir/spotlight/internal/version"
@@ -27,7 +28,6 @@ func main() {
 		configPath string
 		window     string
 		days       int
-		analyze    bool
 		debug      bool
 	)
 
@@ -53,10 +53,6 @@ func main() {
 				cfg.TimeWindow = window
 			}
 
-			if analyze {
-				cfg.LLM.Enabled = true
-			}
-
 			if err := cfg.Validate(); err != nil {
 				return fmt.Errorf("invalid config: %w", err)
 			}
@@ -69,6 +65,7 @@ func main() {
 			prevSince := since.Add(-duration)
 
 			connectors := buildConnectors(cfg)
+			enrichers := buildEnrichers(cfg)
 			writers := buildWriters(cfg)
 
 			// Clean and recreate output directory.
@@ -138,14 +135,12 @@ func main() {
 			report := aggregator.Aggregate(currentRecords, previousRecords, cfg.TimeWindow)
 			log.Infof("Found %d errors in %d group(s)", report.TotalErrors, len(report.Groups))
 
-			if cfg.LLM.Enabled {
-				log.Infof("Running AI analysis with %s...", cfg.LLM.Model)
-				log.Debug("calling claude api", "model", cfg.LLM.Model)
-				text, err := analyzer.Analyze(ctx, report, cfg.LLM)
-				if err != nil {
-					log.Warn("analysis failed", err)
-				} else {
-					report.Analysis = &text
+			// Run enrichers (e.g. LLM analysis).
+			for _, e := range enrichers {
+				log.Infof("  enriching with %s", e.Name())
+				log.Debug("enricher started", "enricher", e.Name())
+				if err := e.Enrich(ctx, report); err != nil {
+					log.Warn(e.Name(), err)
 				}
 			}
 
@@ -167,7 +162,6 @@ func main() {
 	rootCmd.Flags().StringVarP(&configPath, "config", "c", "spotlight.yaml", "Path to config file")
 	rootCmd.Flags().StringVarP(&window, "window", "w", "", "Override time window (e.g. 12h)")
 	rootCmd.Flags().IntVarP(&days, "days", "d", 0, "Number of days to look back (overrides window)")
-	rootCmd.Flags().BoolVar(&analyze, "analyze", false, "Run AI analysis on grouped errors")
 	rootCmd.Flags().BoolVar(&debug, "debug", false, "Enable structured debug logging")
 
 	rootCmd.AddCommand(&cobra.Command{
@@ -197,6 +191,20 @@ func buildConnectors(cfg *config.Config) []connector.Connector {
 		}
 	}
 	return connectors
+}
+
+func buildEnrichers(cfg *config.Config) []enricher.Enricher {
+	var enrichers []enricher.Enricher
+	for _, ec := range cfg.Enrichers {
+		if !ec.Enabled {
+			continue
+		}
+		switch ec.Name {
+		case "llm":
+			enrichers = append(enrichers, analyzer.New(cfg.LLM))
+		}
+	}
+	return enrichers
 }
 
 func buildWriters(cfg *config.Config) []output.Writer {

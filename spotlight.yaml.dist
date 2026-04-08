@@ -2,6 +2,7 @@
 
 time_window: "24h"  # How far back to look
 
+# --- Input connectors ---
 connectors:
   - name: newrelic
     enabled: true
@@ -15,6 +16,13 @@ connectors:
     enabled: true
     api_key: "${HUBSPOT_API_KEY}"
 
+# --- Enrichers (run between aggregation and output) ---
+enrichers:
+  - name: llm
+    enabled: false
+    # LLM settings are configured in the llm: section below.
+
+# --- Output writers ---
 outputs:
   - name: json
     enabled: true
@@ -34,7 +42,9 @@ outputs:
       prefix: "reports/"
       retain_last: 30
 
+# --- LLM settings (used by the llm enricher) ---
 llm:
-  enabled: false
+  provider: "anthropic"             # "anthropic" | "openai"
   api_key: "${ANTHROPIC_API_KEY}"
   model: "claude-sonnet-4-6"
+  # base_url: ""                    # optional: custom endpoint (Azure, proxy, ollama)
