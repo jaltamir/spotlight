@@ -18,6 +18,7 @@ import (
 	"github.com/jaltamir/spotlight/internal/connector/hubspot"
 	"github.com/jaltamir/spotlight/internal/connector/newrelic"
 	"github.com/jaltamir/spotlight/internal/output"
+	"github.com/jaltamir/spotlight/internal/version"
 )
 
 func main() {
@@ -159,6 +160,14 @@ func main() {
 	rootCmd.Flags().StringVarP(&window, "window", "w", "", "Override time window (e.g. 12h)")
 	rootCmd.Flags().IntVarP(&days, "days", "d", 0, "Number of days to look back (overrides window)")
 	rootCmd.Flags().BoolVar(&analyze, "analyze", false, "Run AI analysis on grouped errors")
+
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "version",
+		Short: "Print version information",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println(version.String())
+		},
+	})
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)

@@ -12,6 +12,7 @@ import (
 	"github.com/jaltamir/spotlight/internal/config"
 	"github.com/jaltamir/spotlight/internal/connector"
 	"github.com/jaltamir/spotlight/internal/httpclient"
+	"github.com/jaltamir/spotlight/internal/version"
 )
 
 const nrqlEndpoint = "https://api.newrelic.com/graphql"
@@ -102,7 +103,7 @@ func (c *Connector) queryNerdGraph(ctx context.Context, nrql string) ([]byte, er
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("API-Key", c.apiKey)
-	req.Header.Set("User-Agent", "Spotlight/1.0")
+	req.Header.Set("User-Agent", version.UserAgent())
 
 	resp, err := c.client.Do(req)
 	if err != nil {

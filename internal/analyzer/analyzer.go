@@ -12,6 +12,7 @@ import (
 	"github.com/jaltamir/spotlight/internal/aggregator"
 	"github.com/jaltamir/spotlight/internal/config"
 	"github.com/jaltamir/spotlight/internal/httpclient"
+	"github.com/jaltamir/spotlight/internal/version"
 )
 
 const anthropicAPI = "https://api.anthropic.com/v1/messages"
@@ -49,7 +50,7 @@ func Analyze(ctx context.Context, report *aggregator.Report, cfg config.LLMConfi
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", cfg.APIKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("User-Agent", "Spotlight/1.0")
+	req.Header.Set("User-Agent", version.UserAgent())
 
 	resp, err := httpclient.NewClient(120 * time.Second).Do(req)
 	if err != nil {

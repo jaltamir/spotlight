@@ -12,6 +12,7 @@ import (
 	"github.com/jaltamir/spotlight/internal/config"
 	"github.com/jaltamir/spotlight/internal/connector"
 	"github.com/jaltamir/spotlight/internal/httpclient"
+	"github.com/jaltamir/spotlight/internal/version"
 )
 
 const defaultBaseURL = "https://api.hubapi.com"
@@ -328,7 +329,7 @@ func (c *Connector) doGet(ctx context.Context, url string) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("User-Agent", "Spotlight/1.0")
+	req.Header.Set("User-Agent", version.UserAgent())
 
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -355,7 +356,7 @@ func (c *Connector) doPost(ctx context.Context, url string, body []byte) ([]byte
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Spotlight/1.0")
+	req.Header.Set("User-Agent", version.UserAgent())
 
 	resp, err := c.client.Do(req)
 	if err != nil {
