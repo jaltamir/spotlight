@@ -5,93 +5,19 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/jaltamir/spotlight/internal/config"
 )
 
-func TestCollectCRMBounces(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.Contains(r.URL.Path, "/contacts/search"):
-			// Determine which CRM search this is by reading the body.
-			var req map[string]any
-			json.NewDecoder(r.Body).Decode(&req)
-			fg := req["filterGroups"].([]any)
-			filters := fg[0].(map[string]any)["filters"].([]any)
-			prop := filters[0].(map[string]any)["propertyName"].(string)
-
-			switch prop {
-			case "hs_email_bounce":
-				json.NewEncoder(w).Encode(map[string]any{
-					"total": 2,
-					"results": []map[string]any{
-						{"properties": map[string]string{"email": "bad@test.com", "hs_email_bounce": "3", "hs_email_hard_bounce_reason_enum": "CONTENT", "lastmodifieddate": "2026-04-05T10:00:00Z"}},
-						{"properties": map[string]string{"email": "bounce@test.com", "hs_email_bounce": "1", "lastmodifieddate": "2026-04-05T11:00:00Z"}},
-					},
-				})
-			case "hs_email_bad_address":
-				json.NewEncoder(w).Encode(map[string]any{"total": 1, "results": []map[string]any{
-					{"properties": map[string]string{"email": "invalid@", "lastmodifieddate": "2026-04-05T09:00:00Z"}},
-				}})
-			case "hs_email_quarantined":
-				json.NewEncoder(w).Encode(map[string]any{"total": 0, "results": []any{}})
-			default:
-				json.NewEncoder(w).Encode(map[string]any{"total": 0, "results": []any{}})
-			}
-		case strings.Contains(r.URL.Path, "/audit-logs"):
-			json.NewEncoder(w).Encode(map[string]any{
-				"results": []map[string]any{
-					{
-						"category":       "CRITICAL_ACTION",
-						"subCategory":    "HAPIKEY_CREATE",
-						"action":         "CREATE",
-						"occurredAt":     "2026-04-05T12:00:00Z",
-						"actingUser":     map[string]string{"userEmail": "admin@test.com"},
-						"targetObjectId": "key-123",
-					},
-					{
-						"category":       "CRM_OBJECT",
-						"subCategory":    "CONTACT",
-						"action":         "CREATE",
-						"occurredAt":     "2026-04-05T12:01:00Z",
-						"actingUser":     map[string]string{"userEmail": "user@test.com"},
-						"targetObjectId": "456",
-					},
-				},
-			})
-		case strings.Contains(r.URL.Path, "/api-usage"):
-			json.NewEncoder(w).Encode(map[string]any{
-				"results": []map[string]any{
-					{"name": "private-apps-api-calls-daily", "usageLimit": 1000, "currentUsage": 900, "collectedAt": "2026-04-05T12:00:00Z", "resetsAt": "2026-04-05T22:00:00Z"},
-				},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	c := &Connector{
-		apiKey: "test-token",
-		client: srv.Client(),
+// newTestConnector creates a Connector pointing at the given test server URL.
+func newTestConnector(srv *httptest.Server) *Connector {
+	return &Connector{
+		apiKey:  "test-token",
+		baseURL: srv.URL,
+		client:  srv.Client(),
 	}
-
-	// Monkey-patch the base URL for testing is not ideal.
-	// Instead, we test the sub-functions directly.
-	ctx := context.Background()
-
-	// Test searchContacts via the mock server.
-	results, err := c.searchContacts(ctx, 0, crmSearchRequest{
-		Filters:    []crmFilter{{Property: "hs_email_bounce", Operator: "GT", Value: "0"}},
-		Properties: []string{"email", "hs_email_bounce"},
-	})
-	// This won't work because baseURL is hardcoded. Let's test parseHubspotTime and propOr instead.
-	_ = results
-	_ = err
-	_ = ctx
 }
 
 func TestParseHubspotTime(t *testing.T) {
@@ -147,18 +73,17 @@ func TestNew(t *testing.T) {
 	if c.apiKey != "my-token" {
 		t.Error("api key not set")
 	}
+	if c.baseURL != defaultBaseURL {
+		t.Errorf("expected default baseURL %s, got %s", defaultBaseURL, c.baseURL)
+	}
 }
 
 func TestSearchContactsCopiesFilters(t *testing.T) {
-	// Verify that searchContacts doesn't mutate the input filters.
 	original := []crmFilter{
 		{Property: "hs_email_bounce", Operator: "GT", Value: "0"},
 	}
 	origLen := len(original)
 
-	// We can't call searchContacts without a server, but we can verify
-	// the copy logic by checking the slice length doesn't change.
-	// The real test is that the function creates a new slice.
 	copied := make([]crmFilter, len(original), len(original)+1)
 	copy(copied, original)
 	copied = append(copied, crmFilter{Property: "lastmodifieddate", Operator: "GTE", Value: "123"})
@@ -168,5 +93,186 @@ func TestSearchContactsCopiesFilters(t *testing.T) {
 	}
 	if len(copied) != origLen+1 {
 		t.Error("copy should have extra element")
+	}
+}
+
+// TestSearchContactsPagination verifies that searchContacts fetches multiple pages.
+func TestSearchContactsPagination(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		var req map[string]any
+		json.NewDecoder(r.Body).Decode(&req)
+
+		if req["after"] == nil {
+			// First page — return 1 result and a paging cursor.
+			json.NewEncoder(w).Encode(crmSearchResponse{
+				Total: 2,
+				Results: []crmResult{
+					{Properties: map[string]string{"email": "p1@test.com", "lastmodifieddate": "2026-04-05T10:00:00Z"}},
+				},
+				Paging: &crmPaging{Next: &struct {
+					After string `json:"after"`
+				}{After: "cursor-abc"}},
+			})
+		} else {
+			// Second page — return 1 result, no next cursor.
+			json.NewEncoder(w).Encode(crmSearchResponse{
+				Total: 2,
+				Results: []crmResult{
+					{Properties: map[string]string{"email": "p2@test.com", "lastmodifieddate": "2026-04-05T11:00:00Z"}},
+				},
+			})
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestConnector(srv)
+	results, err := c.searchContacts(context.Background(), 0, crmSearchRequest{
+		Filters:    []crmFilter{{Property: "hs_email_bounce", Operator: "GT", Value: "0"}},
+		Properties: []string{"email", "lastmodifieddate"},
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("expected 2 results across 2 pages, got %d", len(results))
+	}
+	if callCount != 2 {
+		t.Errorf("expected 2 HTTP calls, got %d", callCount)
+	}
+}
+
+// TestSearchContactsMaxPages verifies the max-pages safety cap.
+func TestSearchContactsMaxPages(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		// Always return a next cursor to simulate infinite pagination.
+		json.NewEncoder(w).Encode(crmSearchResponse{
+			Results: []crmResult{
+				{Properties: map[string]string{"email": "x@test.com"}},
+			},
+			Paging: &crmPaging{Next: &struct {
+				After string `json:"after"`
+			}{After: "next"}},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestConnector(srv)
+	results, err := c.searchContacts(context.Background(), 0, crmSearchRequest{
+		Filters:    []crmFilter{{Property: "hs_email_bounce", Operator: "GT", Value: "0"}},
+		Properties: []string{"email"},
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if callCount != maxPages { //nolint:staticcheck
+		t.Errorf("expected maxPages=%d calls, got %d", maxPages, callCount)
+	}
+	if len(results) != maxPages {
+		t.Errorf("expected %d results, got %d", maxPages, len(results))
+	}
+}
+
+// TestSearchContactsContextCancel verifies context cancellation mid-pagination.
+func TestSearchContactsContextCancel(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		json.NewEncoder(w).Encode(crmSearchResponse{
+			Results: []crmResult{{Properties: map[string]string{"email": "x@test.com"}}},
+			Paging: &crmPaging{Next: &struct {
+				After string `json:"after"`
+			}{After: "next"}},
+		})
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Cancel after the first call completes by using a custom handler that cancels.
+	cancelOnce := false
+	srvCancel := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !cancelOnce {
+			cancelOnce = true
+			json.NewEncoder(w).Encode(crmSearchResponse{
+				Results: []crmResult{{Properties: map[string]string{"email": "first@test.com"}}},
+				Paging: &crmPaging{Next: &struct {
+					After string `json:"after"`
+				}{After: "cursor"}}})
+			cancel() // cancel after first page is sent
+		} else {
+			json.NewEncoder(w).Encode(crmSearchResponse{
+				Results: []crmResult{{Properties: map[string]string{"email": "second@test.com"}}},
+			})
+		}
+	}))
+	defer srvCancel.Close()
+
+	c2 := &Connector{apiKey: "token", baseURL: srvCancel.URL, client: srvCancel.Client()}
+	_, err := c2.searchContacts(ctx, 0, crmSearchRequest{
+		Filters:    []crmFilter{{Property: "hs_email_bounce", Operator: "GT", Value: "0"}},
+		Properties: []string{"email"},
+	})
+
+	if err == nil {
+		t.Error("expected context cancellation error")
+	}
+	srv.Close() // close unused server
+}
+
+// TestAuditLogsPagination verifies that collectAuditLogs fetches multiple pages.
+func TestAuditLogsPagination(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		hasAfter := r.URL.Query().Get("after") != ""
+
+		type auditEntry struct {
+			Category    string            `json:"category"`
+			SubCategory string            `json:"subCategory"`
+			Action      string            `json:"action"`
+			OccurredAt  string            `json:"occurredAt"`
+			ActingUser  map[string]string `json:"actingUser"`
+			TargetID    string            `json:"targetObjectId"`
+		}
+
+		entry := auditEntry{
+			Category: "CRITICAL_ACTION", SubCategory: "HAPIKEY_CREATE",
+			Action: "CREATE", OccurredAt: "2026-04-05T10:00:00Z",
+			ActingUser: map[string]string{"userEmail": "admin@test.com"},
+		}
+
+		if !hasAfter {
+			json.NewEncoder(w).Encode(map[string]any{
+				"results": []auditEntry{entry},
+				"paging":  map[string]any{"next": map[string]string{"after": "cursor-xyz"}},
+			})
+		} else {
+			json.NewEncoder(w).Encode(map[string]any{
+				"results": []auditEntry{entry},
+			})
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestConnector(srv)
+	records, err := c.collectAuditLogs(context.Background(),
+		time.Date(2026, 4, 5, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 4, 5, 23, 59, 59, 0, time.UTC),
+	)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(records) != 2 {
+		t.Errorf("expected 2 audit records across 2 pages, got %d", len(records))
+	}
+	if callCount != 2 {
+		t.Errorf("expected 2 HTTP calls, got %d", callCount)
 	}
 }

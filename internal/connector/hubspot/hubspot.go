@@ -13,19 +13,24 @@ import (
 	"github.com/jaltamir/spotlight/internal/connector"
 )
 
-const baseURL = "https://api.hubapi.com"
+const defaultBaseURL = "https://api.hubapi.com"
+
+// maxPages caps pagination loops to avoid runaway requests.
+const maxPages = 50
 
 // Connector fetches errors from HubSpot via CRM search (email issues),
 // audit logs (security events), and API usage (rate limit proximity).
 type Connector struct {
-	apiKey string
-	client *http.Client
+	apiKey  string
+	baseURL string
+	client  *http.Client
 }
 
 func New(cfg config.ConnectorConfig) *Connector {
 	return &Connector{
-		apiKey: cfg.APIKey,
-		client: &http.Client{Timeout: 30 * time.Second},
+		apiKey:  cfg.APIKey,
+		baseURL: defaultBaseURL,
+		client:  &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -122,50 +127,77 @@ func (c *Connector) Collect(ctx context.Context, since, until time.Time) ([]conn
 }
 
 func (c *Connector) collectAuditLogs(ctx context.Context, since, until time.Time) ([]connector.ErrorRecord, error) {
-	url := fmt.Sprintf("%s/account-info/v3/activity/audit-logs?limit=100&occurredAfter=%s&occurredBefore=%s",
-		baseURL, since.Format(time.RFC3339), until.Format(time.RFC3339))
-
-	body, err := c.doGet(ctx, url)
-	if err != nil {
-		return nil, err
+	type auditResult struct {
+		Category    string `json:"category"`
+		SubCategory string `json:"subCategory"`
+		Action      string `json:"action"`
+		OccurredAt  string `json:"occurredAt"`
+		ActingUser  struct {
+			UserEmail string `json:"userEmail"`
+		} `json:"actingUser"`
+		TargetObjectID string `json:"targetObjectId"`
 	}
-
-	var resp struct {
-		Results []struct {
-			Category    string `json:"category"`
-			SubCategory string `json:"subCategory"`
-			Action      string `json:"action"`
-			OccurredAt  string `json:"occurredAt"`
-			ActingUser  struct {
-				UserEmail string `json:"userEmail"`
-			} `json:"actingUser"`
-			TargetObjectID string `json:"targetObjectId"`
-		} `json:"results"`
-	}
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("parsing audit logs: %w", err)
+	type auditResponse struct {
+		Results []auditResult `json:"results"`
+		Paging  *struct {
+			Next *struct {
+				After string `json:"after"`
+			} `json:"next"`
+		} `json:"paging"`
 	}
 
 	var records []connector.ErrorRecord
-	for _, r := range resp.Results {
-		if r.Category != "CRITICAL_ACTION" && r.Category != "LOGIN" {
-			continue
+	after := ""
+
+	for page := 0; page < maxPages; page++ {
+		select {
+		case <-ctx.Done():
+			return records, ctx.Err()
+		default:
 		}
-		records = append(records, connector.ErrorRecord{
-			Source:    "hubspot",
-			Service:  "security",
-			Endpoint: fmt.Sprintf("audit/%s", r.SubCategory),
-			ErrorType: r.Category,
-			Message:  fmt.Sprintf("%s %s by %s (target: %s)", r.Action, r.SubCategory, r.ActingUser.UserEmail, r.TargetObjectID),
-			Timestamp: parseHubspotTime(r.OccurredAt),
-			Count:    1,
-		})
+
+		u := fmt.Sprintf("%s/account-info/v3/activity/audit-logs?limit=100&occurredAfter=%s&occurredBefore=%s",
+			c.baseURL, since.Format(time.RFC3339), until.Format(time.RFC3339))
+		if after != "" {
+			u += "&after=" + after
+		}
+
+		body, err := c.doGet(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+
+		var resp auditResponse
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return nil, fmt.Errorf("parsing audit logs: %w", err)
+		}
+
+		for _, r := range resp.Results {
+			if r.Category != "CRITICAL_ACTION" && r.Category != "LOGIN" {
+				continue
+			}
+			records = append(records, connector.ErrorRecord{
+				Source:    "hubspot",
+				Service:   "security",
+				Endpoint:  fmt.Sprintf("audit/%s", r.SubCategory),
+				ErrorType: r.Category,
+				Message:   fmt.Sprintf("%s %s by %s (target: %s)", r.Action, r.SubCategory, r.ActingUser.UserEmail, r.TargetObjectID),
+				Timestamp: parseHubspotTime(r.OccurredAt),
+				Count:     1,
+			})
+		}
+
+		if resp.Paging == nil || resp.Paging.Next == nil || resp.Paging.Next.After == "" {
+			break
+		}
+		after = resp.Paging.Next.After
 	}
+
 	return records, nil
 }
 
 func (c *Connector) collectAPIUsage(ctx context.Context) ([]connector.ErrorRecord, error) {
-	body, err := c.doGet(ctx, baseURL+"/account-info/v3/api-usage/daily/private-apps")
+	body, err := c.doGet(ctx, c.baseURL+"/account-info/v3/api-usage/daily/private-apps")
 	if err != nil {
 		return nil, err
 	}
@@ -215,9 +247,16 @@ type crmSearchRequest struct {
 	Properties []string
 }
 
+type crmPaging struct {
+	Next *struct {
+		After string `json:"after"`
+	} `json:"next"`
+}
+
 type crmSearchResponse struct {
 	Total   int         `json:"total"`
 	Results []crmResult `json:"results"`
+	Paging  *crmPaging  `json:"paging"`
 }
 
 type crmResult struct {
@@ -234,29 +273,52 @@ func (c *Connector) searchContacts(ctx context.Context, sinceMilli int64, req cr
 		Value:    fmt.Sprintf("%d", sinceMilli),
 	})
 
-	body, err := json.Marshal(map[string]any{
-		"filterGroups": []map[string]any{
-			{"filters": filters},
-		},
-		"properties": req.Properties,
-		"sorts":      []map[string]string{{"propertyName": "lastmodifieddate", "direction": "DESCENDING"}},
-		"limit":      100,
-	})
-	if err != nil {
-		return nil, err
+	var all []crmResult
+	after := ""
+
+	for page := 0; page < maxPages; page++ {
+		select {
+		case <-ctx.Done():
+			return all, ctx.Err()
+		default:
+		}
+
+		payload := map[string]any{
+			"filterGroups": []map[string]any{
+				{"filters": filters},
+			},
+			"properties": req.Properties,
+			"sorts":      []map[string]string{{"propertyName": "lastmodifieddate", "direction": "DESCENDING"}},
+			"limit":      100,
+		}
+		if after != "" {
+			payload["after"] = after
+		}
+
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+
+		respBody, err := c.doPost(ctx, c.baseURL+"/crm/v3/objects/contacts/search", body)
+		if err != nil {
+			return nil, err
+		}
+
+		var resp crmSearchResponse
+		if err := json.Unmarshal(respBody, &resp); err != nil {
+			return nil, fmt.Errorf("parsing response: %w", err)
+		}
+
+		all = append(all, resp.Results...)
+
+		if resp.Paging == nil || resp.Paging.Next == nil || resp.Paging.Next.After == "" {
+			break
+		}
+		after = resp.Paging.Next.After
 	}
 
-	respBody, err := c.doPost(ctx, baseURL+"/crm/v3/objects/contacts/search", body)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp crmSearchResponse
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return nil, fmt.Errorf("parsing response: %w", err)
-	}
-
-	return resp.Results, nil
+	return all, nil
 }
 
 func (c *Connector) doGet(ctx context.Context, url string) ([]byte, error) {
