@@ -15,13 +15,14 @@ import (
 	"github.com/jaltamir/spotlight/internal/version"
 )
 
-const nrqlEndpoint = "https://api.newrelic.com/graphql"
+const defaultEndpoint = "https://api.newrelic.com/graphql"
 
 // Connector fetches error traces from New Relic via NRQL/NerdGraph.
 type Connector struct {
 	apiKey       string
 	accountID    string
 	applications []string
+	endpoint     string
 	client       *http.Client
 }
 
@@ -30,6 +31,7 @@ func New(cfg config.ConnectorConfig) *Connector {
 		apiKey:       cfg.APIKey,
 		accountID:    cfg.AccountID,
 		applications: cfg.Applications,
+		endpoint:     defaultEndpoint,
 		client:       httpclient.NewClient(30 * time.Second),
 	}
 }
@@ -97,7 +99,7 @@ func (c *Connector) queryNerdGraph(ctx context.Context, nrql string) ([]byte, er
 	}`, c.accountID, escapeGraphQL(nrql))
 
 	payload := fmt.Sprintf(`{"query":%q}`, gql)
-	req, err := http.NewRequestWithContext(ctx, "POST", nrqlEndpoint, strings.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.endpoint, strings.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}

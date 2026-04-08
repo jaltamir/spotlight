@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -223,6 +224,125 @@ func TestSearchContactsContextCancel(t *testing.T) {
 		t.Error("expected context cancellation error")
 	}
 	srv.Close() // close unused server
+}
+
+// TestCollectFullFlow tests the full Collect() method with a mock server.
+func TestCollectFullFlow(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/contacts/search"):
+			var req map[string]any
+			json.NewDecoder(r.Body).Decode(&req)
+			fg := req["filterGroups"].([]any)
+			filters := fg[0].(map[string]any)["filters"].([]any)
+			prop := filters[0].(map[string]any)["propertyName"].(string)
+
+			switch prop {
+			case "hs_email_bounce":
+				json.NewEncoder(w).Encode(crmSearchResponse{
+					Results: []crmResult{
+						{Properties: map[string]string{
+							"email": "bounce@test.com", "hs_email_bounce": "2",
+							"hs_email_hard_bounce_reason_enum": "CONTENT",
+							"lastmodifieddate":                 "2026-04-05T10:00:00Z",
+						}},
+					},
+				})
+			case "hs_email_bad_address":
+				json.NewEncoder(w).Encode(crmSearchResponse{
+					Results: []crmResult{
+						{Properties: map[string]string{"email": "bad@test.com", "lastmodifieddate": "2026-04-05T11:00:00Z"}},
+					},
+				})
+			default:
+				json.NewEncoder(w).Encode(crmSearchResponse{})
+			}
+		case strings.Contains(r.URL.Path, "/audit-logs"):
+			json.NewEncoder(w).Encode(map[string]any{
+				"results": []map[string]any{
+					{
+						"category": "CRITICAL_ACTION", "subCategory": "HAPIKEY_CREATE",
+						"action": "CREATE", "occurredAt": "2026-04-05T12:00:00Z",
+						"actingUser":     map[string]string{"userEmail": "admin@test.com"},
+						"targetObjectId": "key-123",
+					},
+				},
+			})
+		case strings.Contains(r.URL.Path, "/api-usage"):
+			json.NewEncoder(w).Encode(map[string]any{
+				"results": []map[string]any{
+					{"name": "api-calls-daily", "usageLimit": 1000, "currentUsage": 900,
+						"collectedAt": "2026-04-05T12:00:00Z", "resetsAt": "2026-04-05T22:00:00Z"},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestConnector(srv)
+	since := time.Date(2026, 4, 5, 0, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 4, 5, 23, 59, 59, 0, time.UTC)
+
+	records, err := c.Collect(context.Background(), since, until)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Expect: 1 bounce + 1 bad_address + 1 audit + 1 usage = 4
+	if len(records) != 4 {
+		t.Errorf("expected 4 records, got %d", len(records))
+		for _, r := range records {
+			t.Logf("  %s/%s/%s", r.Source, r.Service, r.ErrorType)
+		}
+	}
+}
+
+// TestCollectHTTP500 verifies error propagation from a failing server.
+func TestCollectHTTP500(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := newTestConnector(srv)
+	_, err := c.Collect(context.Background(),
+		time.Now().Add(-time.Hour), time.Now())
+	if err == nil {
+		t.Fatal("expected error for HTTP 500")
+	}
+}
+
+// TestCollectAPIUsage verifies the collectAPIUsage sub-function.
+func TestCollectAPIUsage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"results": []map[string]any{
+				// Below threshold — should NOT produce a record.
+				{"name": "low-usage", "usageLimit": 1000, "currentUsage": 100,
+					"collectedAt": "2026-04-05T12:00:00Z", "resetsAt": "2026-04-05T22:00:00Z"},
+				// Above 80% — should produce a record.
+				{"name": "high-usage", "usageLimit": 1000, "currentUsage": 900,
+					"collectedAt": "2026-04-05T12:00:00Z", "resetsAt": "2026-04-05T22:00:00Z"},
+				// Zero limit — should be skipped.
+				{"name": "zero-limit", "usageLimit": 0, "currentUsage": 0},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestConnector(srv)
+	records, err := c.collectAPIUsage(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(records) != 1 {
+		t.Errorf("expected 1 rate limit record, got %d", len(records))
+	}
+	if len(records) > 0 && records[0].ErrorType != "rate_limit_warning" {
+		t.Errorf("expected rate_limit_warning, got %s", records[0].ErrorType)
+	}
 }
 
 // TestAuditLogsPagination verifies that collectAuditLogs fetches multiple pages.

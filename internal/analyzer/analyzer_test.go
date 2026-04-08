@@ -4,13 +4,21 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/jaltamir/spotlight/internal/aggregator"
 	"github.com/jaltamir/spotlight/internal/config"
 )
 
-func TestAnalyzeSuccess(t *testing.T) {
+func newTestAnalyzer(srv *httptest.Server) *Analyzer {
+	return &Analyzer{
+		baseURL: srv.URL,
+		client:  srv.Client(),
+	}
+}
+
+func TestAnalyzeFullFlow(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("x-api-key") != "test-key" {
 			t.Errorf("expected x-api-key=test-key, got %q", r.Header.Get("x-api-key"))
@@ -18,40 +26,75 @@ func TestAnalyzeSuccess(t *testing.T) {
 		if r.Header.Get("anthropic-version") != "2023-06-01" {
 			t.Errorf("unexpected anthropic-version: %s", r.Header.Get("anthropic-version"))
 		}
-		if r.Header.Get("User-Agent") != "Spotlight/1.0" {
-			t.Errorf("expected User-Agent Spotlight/1.0, got %q", r.Header.Get("User-Agent"))
-		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
-			"content": [{"type": "text", "text": "Analysis: everything is on fire."}]
-		}`))
+		w.Write([]byte(`{"content": [{"type": "text", "text": "Analysis: database overload."}]}`))
 	}))
 	defer srv.Close()
 
-	// We can't easily override the const URL in the package.
-	// Test the truncate helper instead, and rely on integration tests for the full flow.
-	_ = srv
+	a := newTestAnalyzer(srv)
+	report := &aggregator.Report{TimeWindow: "24h", TotalErrors: 10}
+	cfg := config.LLMConfig{APIKey: "test-key", Model: "claude-sonnet-4-6"}
+
+	text, err := a.Analyze(context.Background(), report, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if text != "Analysis: database overload." {
+		t.Errorf("unexpected analysis text: %q", text)
+	}
 }
 
-func TestAnalyzeWithMockReport(t *testing.T) {
-	report := &aggregator.Report{
-		GeneratedAt: "2026-04-05T12:00:00Z",
-		TimeWindow:  "24h",
-		TotalErrors: 100,
-		Groups: []aggregator.Group{
-			{Rank: 1, Source: "newrelic", Service: "svc", Endpoint: "/api", ErrorType: "HTTP 500", Count: 100, Trend: "rising"},
-		},
-	}
+func TestAnalyzeHTTP500(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("server error"))
+	}))
+	defer srv.Close()
 
-	cfg := config.LLMConfig{
-		APIKey: "test-key",
-		Model:  "claude-sonnet-4-6",
-	}
+	a := newTestAnalyzer(srv)
+	report := &aggregator.Report{TimeWindow: "1h"}
+	cfg := config.LLMConfig{APIKey: "key", Model: "model"}
 
-	// This will fail because it hits the real API — it's a compile check
-	// to ensure the function signature is correct.
-	_ = report
-	_ = cfg
+	_, err := a.Analyze(context.Background(), report, cfg)
+	if err == nil {
+		t.Fatal("expected error for HTTP 500")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("expected error to mention status code, got: %v", err)
+	}
+}
+
+func TestAnalyzeEmptyResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"content": []}`))
+	}))
+	defer srv.Close()
+
+	a := newTestAnalyzer(srv)
+	report := &aggregator.Report{TimeWindow: "1h"}
+	cfg := config.LLMConfig{APIKey: "key", Model: "model"}
+
+	_, err := a.Analyze(context.Background(), report, cfg)
+	if err == nil {
+		t.Fatal("expected error for empty content array")
+	}
+	if !strings.Contains(err.Error(), "empty response") {
+		t.Errorf("expected 'empty response' error, got: %v", err)
+	}
+}
+
+func TestAnalyzeCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately.
+
+	report := &aggregator.Report{TimeWindow: "1h"}
+	cfg := config.LLMConfig{APIKey: "key", Model: "model"}
+
+	_, err := Analyze(ctx, report, cfg)
+	if err == nil {
+		t.Fatal("expected error with cancelled context")
+	}
 }
 
 func TestTruncate(t *testing.T) {
@@ -70,18 +113,5 @@ func TestTruncate(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("truncate(%q, %d) = %q, want %q", tt.input, tt.max, got, tt.want)
 		}
-	}
-}
-
-func TestAnalyzeCancelledContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately.
-
-	report := &aggregator.Report{TimeWindow: "1h"}
-	cfg := config.LLMConfig{APIKey: "key", Model: "model"}
-
-	_, err := Analyze(ctx, report, cfg)
-	if err == nil {
-		t.Fatal("expected error with cancelled context")
 	}
 }

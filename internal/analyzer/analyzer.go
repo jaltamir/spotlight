@@ -15,10 +15,30 @@ import (
 	"github.com/jaltamir/spotlight/internal/version"
 )
 
-const anthropicAPI = "https://api.anthropic.com/v1/messages"
+const defaultAnthropicAPI = "https://api.anthropic.com/v1/messages"
+
+// Analyzer sends grouped reports to the Claude API for analysis.
+type Analyzer struct {
+	baseURL string
+	client  *http.Client
+}
+
+// New returns an Analyzer with default settings.
+func New() *Analyzer {
+	return &Analyzer{
+		baseURL: defaultAnthropicAPI,
+		client:  httpclient.NewClient(120 * time.Second),
+	}
+}
 
 // Analyze sends the grouped report to Claude API and returns the analysis text.
+// This package-level function is kept for backwards compatibility with main.go.
 func Analyze(ctx context.Context, report *aggregator.Report, cfg config.LLMConfig) (string, error) {
+	return New().Analyze(ctx, report, cfg)
+}
+
+// Analyze sends the grouped report to Claude API and returns the analysis text.
+func (a *Analyzer) Analyze(ctx context.Context, report *aggregator.Report, cfg config.LLMConfig) (string, error) {
 	reportJSON, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("marshaling report: %w", err)
@@ -43,7 +63,7 @@ func Analyze(ctx context.Context, report *aggregator.Report, cfg config.LLMConfi
 		return "", fmt.Errorf("building request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", anthropicAPI, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", a.baseURL, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
@@ -52,7 +72,7 @@ func Analyze(ctx context.Context, report *aggregator.Report, cfg config.LLMConfi
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("User-Agent", version.UserAgent())
 
-	resp, err := httpclient.NewClient(120 * time.Second).Do(req)
+	resp, err := a.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("calling claude api: %w", err)
 	}

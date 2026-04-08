@@ -1,12 +1,124 @@
 package newrelic
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jaltamir/spotlight/internal/config"
 )
+
+// newTestConnector creates a Connector pointing at the given test server URL.
+func newTestConnector(srv *httptest.Server, accountID string) *Connector {
+	return &Connector{
+		apiKey:    "test-key",
+		accountID: accountID,
+		endpoint:  srv.URL,
+		client:    srv.Client(),
+	}
+}
+
+func TestCollectFullFlow(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("API-Key") != "test-key" {
+			t.Errorf("expected API-Key=test-key, got %q", r.Header.Get("API-Key"))
+		}
+		json.NewEncoder(w).Encode(nerdGraphResponse{
+			Data: struct {
+				Actor struct {
+					Account struct {
+						NRQL struct {
+							Results []nrqlResult `json:"results"`
+						} `json:"nrql"`
+					} `json:"account"`
+				} `json:"actor"`
+			}{
+				Actor: struct {
+					Account struct {
+						NRQL struct {
+							Results []nrqlResult `json:"results"`
+						} `json:"nrql"`
+					} `json:"account"`
+				}{
+					Account: struct {
+						NRQL struct {
+							Results []nrqlResult `json:"results"`
+						} `json:"nrql"`
+					}{
+						NRQL: struct {
+							Results []nrqlResult `json:"results"`
+						}{
+							Results: []nrqlResult{
+								{Facet: []any{"svc-a", "/api/foo", "RuntimeError", "500", "broken"}, Count: 10},
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := newTestConnector(srv, "123")
+	since := time.Date(2026, 4, 5, 0, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 4, 5, 23, 59, 59, 0, time.UTC)
+
+	records, err := c.Collect(context.Background(), since, until)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	if records[0].Service != "svc-a" {
+		t.Errorf("expected service=svc-a, got %s", records[0].Service)
+	}
+	if records[0].Count != 10 {
+		t.Errorf("expected count=10, got %d", records[0].Count)
+	}
+}
+
+func TestCollectNerdGraphError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data": null, "errors": [{"message": "unauthorized"}]}`))
+	}))
+	defer srv.Close()
+
+	c := newTestConnector(srv, "123")
+	_, err := c.Collect(context.Background(),
+		time.Now().Add(-time.Hour), time.Now())
+	if err == nil {
+		t.Fatal("expected error for nerdgraph error response")
+	}
+	if !strings.Contains(err.Error(), "unauthorized") {
+		t.Errorf("expected error to contain 'unauthorized', got: %v", err)
+	}
+}
+
+func TestCollectHTTP500(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("internal error"))
+	}))
+	defer srv.Close()
+
+	// Use a connector without RetryTransport so we get immediate 500.
+	c := &Connector{
+		apiKey:    "key",
+		accountID: "123",
+		endpoint:  srv.URL,
+		client:    srv.Client(),
+	}
+	_, err := c.Collect(context.Background(),
+		time.Now().Add(-time.Hour), time.Now())
+	if err == nil {
+		t.Fatal("expected error for HTTP 500")
+	}
+}
 
 func TestParseResults(t *testing.T) {
 	records, err := parseResults([]byte(`{
