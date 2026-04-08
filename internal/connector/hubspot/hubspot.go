@@ -11,6 +11,7 @@ import (
 
 	"github.com/jaltamir/spotlight/internal/config"
 	"github.com/jaltamir/spotlight/internal/connector"
+	"github.com/jaltamir/spotlight/internal/httpclient"
 )
 
 const defaultBaseURL = "https://api.hubapi.com"
@@ -30,7 +31,7 @@ func New(cfg config.ConnectorConfig) *Connector {
 	return &Connector{
 		apiKey:  cfg.APIKey,
 		baseURL: defaultBaseURL,
-		client:  &http.Client{Timeout: 30 * time.Second},
+		client:  httpclient.NewClient(30 * time.Second),
 	}
 }
 

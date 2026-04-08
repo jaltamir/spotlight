@@ -11,6 +11,7 @@ import (
 
 	"github.com/jaltamir/spotlight/internal/config"
 	"github.com/jaltamir/spotlight/internal/connector"
+	"github.com/jaltamir/spotlight/internal/httpclient"
 )
 
 const nrqlEndpoint = "https://api.newrelic.com/graphql"
@@ -28,7 +29,7 @@ func New(cfg config.ConnectorConfig) *Connector {
 		apiKey:       cfg.APIKey,
 		accountID:    cfg.AccountID,
 		applications: cfg.Applications,
-		client:       &http.Client{Timeout: 30 * time.Second},
+		client:       httpclient.NewClient(30 * time.Second),
 	}
 }
 
