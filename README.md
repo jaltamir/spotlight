@@ -9,15 +9,12 @@ Spotlight collects errors from multiple data sources in parallel, groups them by
 ## Architecture
 
 ```
-Connectors          Aggregator          Enrichers         Writers
-
-┌─────────────┐                                        ┌─────────────┐
-│  newrelic   │─┐   ┌──────────────┐   ┌───────────┐  │    json     │
-└─────────────┘ ├──▶│ group + rank │──▶│    llm    │──▶├─────────────┤
-┌─────────────┐ │   │ by impact    │   ├───────────┤  │    html     │
-│   hubspot   │─┘   └──────────────┘   │  dedup, … │  ├─────────────┤
-└─────────────┘                        └───────────┘  │     s3      │
-                                                      └─────────────┘
+                    ┌────────────┐   ┌─────────┐
+  newrelic ─┐       │ group +    │   │   llm   │       ┌─ json
+            ├──────▶│ rank by    │──▶│         │──────▶├─ html
+  hubspot ──┘       │ impact     │   │ dedup,… │       └─ s3
+                    └────────────┘   └─────────┘
+  connectors         aggregator       enrichers         writers
 ```
 
 Connectors, enrichers, and writers each implement a simple interface and are configured in `spotlight.yaml`. The pipeline runs sequentially: **collect → aggregate → enrich → write**.
