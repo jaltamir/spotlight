@@ -6,6 +6,95 @@ import (
 	"testing"
 )
 
+// validConfig returns a Config that passes Validate().
+func validConfig() *Config {
+	return &Config{
+		TimeWindow: "24h",
+		Connectors: []ConnectorConfig{
+			{Name: "newrelic", Enabled: true, APIKey: "key", AccountID: "123"},
+		},
+		Outputs: []OutputConfig{
+			{Name: "json", Enabled: true, Path: "./reports"},
+		},
+	}
+}
+
+func TestValidateHappyPath(t *testing.T) {
+	if err := validConfig().Validate(); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestValidateNoEnabledConnectors(t *testing.T) {
+	cfg := validConfig()
+	cfg.Connectors[0].Enabled = false
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for no enabled connectors")
+	}
+}
+
+func TestValidateNoEnabledOutputs(t *testing.T) {
+	cfg := validConfig()
+	cfg.Outputs[0].Enabled = false
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for no enabled outputs")
+	}
+}
+
+func TestValidateNewRelicMissingAPIKey(t *testing.T) {
+	cfg := validConfig()
+	cfg.Connectors[0].APIKey = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for newrelic missing api_key")
+	}
+}
+
+func TestValidateNewRelicMissingAccountID(t *testing.T) {
+	cfg := validConfig()
+	cfg.Connectors[0].AccountID = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for newrelic missing account_id")
+	}
+}
+
+func TestValidateHubSpotMissingAPIKey(t *testing.T) {
+	cfg := validConfig()
+	cfg.Connectors = []ConnectorConfig{
+		{Name: "hubspot", Enabled: true, APIKey: ""},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for hubspot missing api_key")
+	}
+}
+
+func TestValidateS3MissingFields(t *testing.T) {
+	cfg := validConfig()
+	cfg.Outputs = append(cfg.Outputs, OutputConfig{
+		Name:    "s3",
+		Enabled: true,
+		S3:      S3Config{Bucket: "", Region: ""},
+	})
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for s3 missing bucket/region")
+	}
+}
+
+func TestValidateInvalidTimeWindow(t *testing.T) {
+	cfg := validConfig()
+	cfg.TimeWindow = "notaduration"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for invalid time_window")
+	}
+}
+
+func TestValidateLLMEnabledWithoutKey(t *testing.T) {
+	cfg := validConfig()
+	cfg.LLM = LLMConfig{Enabled: true, APIKey: ""}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for llm.enabled without api_key")
+	}
+}
+
 func TestLoadConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.yaml")

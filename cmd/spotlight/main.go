@@ -48,10 +48,15 @@ func main() {
 				cfg.TimeWindow = window
 			}
 
-			duration, err := time.ParseDuration(cfg.TimeWindow)
-			if err != nil {
-				return fmt.Errorf("invalid time window %q: %w", cfg.TimeWindow, err)
+			if analyze {
+				cfg.LLM.Enabled = true
 			}
+
+			if err := cfg.Validate(); err != nil {
+				return fmt.Errorf("invalid config: %w", err)
+			}
+
+			duration, _ := time.ParseDuration(cfg.TimeWindow) // already validated above
 
 			now := time.Now().UTC()
 			until := now
@@ -59,14 +64,7 @@ func main() {
 			prevSince := since.Add(-duration)
 
 			connectors := buildConnectors(cfg)
-			if len(connectors) == 0 {
-				return fmt.Errorf("no connectors enabled in config")
-			}
-
 			writers := buildWriters(cfg)
-			if len(writers) == 0 {
-				return fmt.Errorf("no outputs enabled in config")
-			}
 
 			// Clean and recreate output directory.
 			outDir := cfg.OutputDir()
@@ -134,9 +132,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Found %d errors in %d group(s)\n", report.TotalErrors, len(report.Groups))
 
 			if analyze || cfg.LLM.Enabled {
-				if cfg.LLM.APIKey == "" {
-					return fmt.Errorf("--analyze requires llm.api_key in config or ANTHROPIC_API_KEY env var")
-				}
 				fmt.Fprintf(os.Stderr, "Running AI analysis with %s...\n", cfg.LLM.Model)
 				text, err := analyzer.Analyze(ctx, report, cfg.LLM)
 				if err != nil {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -84,6 +85,65 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// Validate checks that the config is semantically valid after all overrides are applied.
+// It is a separate method (not called from Load) so CLI overrides can happen first.
+func (c *Config) Validate() error {
+	if _, err := time.ParseDuration(c.TimeWindow); err != nil {
+		return fmt.Errorf("invalid time_window %q: %w", c.TimeWindow, err)
+	}
+
+	var enabledConnectors int
+	for _, cc := range c.Connectors {
+		if !cc.Enabled {
+			continue
+		}
+		enabledConnectors++
+		switch cc.Name {
+		case "newrelic":
+			if cc.APIKey == "" {
+				return fmt.Errorf("connector newrelic: api_key is required")
+			}
+			if cc.AccountID == "" {
+				return fmt.Errorf("connector newrelic: account_id is required")
+			}
+		case "hubspot":
+			if cc.APIKey == "" {
+				return fmt.Errorf("connector hubspot: api_key is required")
+			}
+		}
+		// Unknown connector names are allowed (forward compatibility).
+	}
+	if enabledConnectors == 0 {
+		return fmt.Errorf("at least one connector must be enabled")
+	}
+
+	var enabledOutputs int
+	for _, oc := range c.Outputs {
+		if !oc.Enabled {
+			continue
+		}
+		enabledOutputs++
+		if oc.Name == "s3" {
+			if oc.S3.Bucket == "" {
+				return fmt.Errorf("output s3: bucket is required")
+			}
+			if oc.S3.Region == "" {
+				return fmt.Errorf("output s3: region is required")
+			}
+		}
+		// Unknown output names are allowed (forward compatibility).
+	}
+	if enabledOutputs == 0 {
+		return fmt.Errorf("at least one output must be enabled")
+	}
+
+	if c.LLM.Enabled && c.LLM.APIKey == "" {
+		return fmt.Errorf("llm.enabled requires llm.api_key")
+	}
+
+	return nil
 }
 
 // OutputDir returns the output path from the first file-based output,
