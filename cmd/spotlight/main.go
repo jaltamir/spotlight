@@ -17,6 +17,7 @@ import (
 	"github.com/jaltamir/spotlight/internal/connector"
 	"github.com/jaltamir/spotlight/internal/connector/hubspot"
 	"github.com/jaltamir/spotlight/internal/connector/newrelic"
+	"github.com/jaltamir/spotlight/internal/log"
 	"github.com/jaltamir/spotlight/internal/output"
 	"github.com/jaltamir/spotlight/internal/version"
 )
@@ -27,6 +28,7 @@ func main() {
 		window     string
 		days       int
 		analyze    bool
+		debug      bool
 	)
 
 	_ = godotenv.Load()
@@ -35,6 +37,8 @@ func main() {
 		Use:   "spotlight",
 		Short: "CLI tool that connects to your APMs and integrations, groups errors by pattern, and tells you where to look.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			log.SetDebug(debug)
+
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 			defer cancel()
 
@@ -76,8 +80,7 @@ func main() {
 				return fmt.Errorf("creating output dir: %w", err)
 			}
 
-			// Collect from all connectors in parallel.
-			fmt.Fprintf(os.Stderr, "Collecting errors from %d connector(s) for window %s...\n", len(connectors), cfg.TimeWindow)
+			log.Infof("Collecting errors from %d connector(s) for window %s...", len(connectors), cfg.TimeWindow)
 
 			type result struct {
 				name     string
@@ -93,7 +96,8 @@ func main() {
 				wg.Add(1)
 				go func(c connector.Connector) {
 					defer wg.Done()
-					fmt.Fprintf(os.Stderr, "  → %s\n", c.Name())
+					log.Infof("  collecting from %s", c.Name())
+					log.Debug("connector started", "connector", c.Name(), "since", since, "until", until)
 
 					r := result{name: c.Name()}
 
@@ -104,12 +108,14 @@ func main() {
 						return
 					}
 					r.current = cur
+					log.Debug("connector current window done", "connector", c.Name(), "records", len(cur))
 
 					prev, err := c.Collect(ctx, prevSince, since)
 					if err != nil {
-						fmt.Fprintf(os.Stderr, "  ⚠ %s (previous window): %v\n", c.Name(), err)
+						log.Warn(c.Name()+" (previous window)", err)
 					} else {
 						r.previous = prev
+						log.Debug("connector previous window done", "connector", c.Name(), "records", len(prev))
 					}
 
 					results <- r
@@ -122,7 +128,7 @@ func main() {
 			var currentRecords, previousRecords []connector.ErrorRecord
 			for r := range results {
 				if r.err != nil {
-					fmt.Fprintf(os.Stderr, "  ⚠ %s: %v\n", r.name, r.err)
+					log.Warn(r.name, r.err)
 					continue
 				}
 				currentRecords = append(currentRecords, r.current...)
@@ -130,13 +136,14 @@ func main() {
 			}
 
 			report := aggregator.Aggregate(currentRecords, previousRecords, cfg.TimeWindow)
-			fmt.Fprintf(os.Stderr, "Found %d errors in %d group(s)\n", report.TotalErrors, len(report.Groups))
+			log.Infof("Found %d errors in %d group(s)", report.TotalErrors, len(report.Groups))
 
-			if analyze || cfg.LLM.Enabled {
-				fmt.Fprintf(os.Stderr, "Running AI analysis with %s...\n", cfg.LLM.Model)
+			if cfg.LLM.Enabled {
+				log.Infof("Running AI analysis with %s...", cfg.LLM.Model)
+				log.Debug("calling claude api", "model", cfg.LLM.Model)
 				text, err := analyzer.Analyze(ctx, report, cfg.LLM)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "  ⚠ analysis failed: %v\n", err)
+					log.Warn("analysis failed", err)
 				} else {
 					report.Analysis = &text
 				}
@@ -145,13 +152,14 @@ func main() {
 			// Run all enabled output writers.
 			ts := now.Format("2006-01-02T150405Z")
 			for _, w := range writers {
-				fmt.Fprintf(os.Stderr, "  ← %s\n", w.Name())
+				log.Infof("  writing %s", w.Name())
+				log.Debug("writer started", "writer", w.Name(), "outDir", outDir)
 				if err := w.Write(ctx, report, outDir, ts); err != nil {
-					fmt.Fprintf(os.Stderr, "  ⚠ %s: %v\n", w.Name(), err)
+					log.Warn(w.Name(), err)
 				}
 			}
 
-			fmt.Fprintf(os.Stderr, "Done. Output in %s/\n", outDir)
+			log.Infof("Done. Output in %s/", outDir)
 			return nil
 		},
 	}
@@ -160,6 +168,7 @@ func main() {
 	rootCmd.Flags().StringVarP(&window, "window", "w", "", "Override time window (e.g. 12h)")
 	rootCmd.Flags().IntVarP(&days, "days", "d", 0, "Number of days to look back (overrides window)")
 	rootCmd.Flags().BoolVar(&analyze, "analyze", false, "Run AI analysis on grouped errors")
+	rootCmd.Flags().BoolVar(&debug, "debug", false, "Enable structured debug logging")
 
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "version",

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/jaltamir/spotlight/internal/log"
 )
 
 // retryStatuses are the HTTP status codes that trigger a retry.
@@ -103,6 +105,8 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if !retryStatuses[resp.StatusCode] {
 			return resp, nil
 		}
+
+		log.Debug("retrying request", "attempt", attempt+1, "status", resp.StatusCode, "url", req.URL.String())
 
 		// Drain and close body before retrying so the connection can be reused.
 		io.Copy(io.Discard, resp.Body)
