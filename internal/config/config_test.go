@@ -114,6 +114,26 @@ func TestValidateLLMEnricherValid(t *testing.T) {
 	}
 }
 
+func TestValidateRollbarMissingAPIKey(t *testing.T) {
+	cfg := validConfig()
+	cfg.Connectors = []ConnectorConfig{
+		{Name: "rollbar", Enabled: true, APIKey: "", AccountID: "my-project"},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for rollbar missing api_key")
+	}
+}
+
+func TestValidateRollbarMissingAccountID(t *testing.T) {
+	cfg := validConfig()
+	cfg.Connectors = []ConnectorConfig{
+		{Name: "rollbar", Enabled: true, APIKey: "token", AccountID: ""},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for rollbar missing account_id")
+	}
+}
+
 func TestLoadConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.yaml")

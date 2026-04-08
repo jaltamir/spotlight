@@ -16,6 +16,13 @@ connectors:
     enabled: true
     api_key: "${HUBSPOT_API_KEY}"
 
+  # - name: rollbar
+  #   enabled: false
+  #   api_key: "${ROLLBAR_TOKEN}"
+  #   account_id: "my-project"           # project slug (used as service name in reports)
+  #   applications:                       # environment filter (optional)
+  #     - "production"
+
 # --- Enrichers (run between aggregation and output) ---
 enrichers:
   - name: llm

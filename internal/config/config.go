@@ -121,6 +121,13 @@ func (c *Config) Validate() error {
 			if cc.APIKey == "" {
 				return fmt.Errorf("connector hubspot: api_key is required")
 			}
+		case "rollbar":
+			if cc.APIKey == "" {
+				return fmt.Errorf("connector rollbar: api_key is required")
+			}
+			if cc.AccountID == "" {
+				return fmt.Errorf("connector rollbar: account_id is required (project slug)")
+			}
 		}
 		// Unknown connector names are allowed (forward compatibility).
 	}

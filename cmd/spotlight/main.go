@@ -17,6 +17,7 @@ import (
 	"github.com/jaltamir/spotlight/internal/connector"
 	"github.com/jaltamir/spotlight/internal/connector/hubspot"
 	"github.com/jaltamir/spotlight/internal/connector/newrelic"
+	"github.com/jaltamir/spotlight/internal/connector/rollbar"
 	"github.com/jaltamir/spotlight/internal/enricher"
 	"github.com/jaltamir/spotlight/internal/log"
 	"github.com/jaltamir/spotlight/internal/output"
@@ -188,6 +189,8 @@ func buildConnectors(cfg *config.Config) []connector.Connector {
 			connectors = append(connectors, newrelic.New(cc))
 		case "hubspot":
 			connectors = append(connectors, hubspot.New(cc))
+		case "rollbar":
+			connectors = append(connectors, rollbar.New(cc))
 		}
 	}
 	return connectors
