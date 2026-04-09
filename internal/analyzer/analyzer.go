@@ -18,18 +18,20 @@ import (
 const (
 	defaultAnthropicURL = "https://api.anthropic.com/v1/messages"
 	defaultOpenAIURL    = "https://api.openai.com/v1/chat/completions"
+	maxRawRecords       = 500
 )
 
 // Analyzer sends grouped reports to an LLM API for analysis.
 // It implements the enricher.Enricher interface.
 type Analyzer struct {
-	baseURL string
-	client  *http.Client
-	cfg     config.LLMConfig
+	baseURL      string
+	client       *http.Client
+	cfg          config.LLMConfig
+	systemPrompt string
 }
 
-// New returns an Analyzer configured with the given LLM settings.
-func New(cfg config.LLMConfig) *Analyzer {
+// New returns an Analyzer configured with the given LLM settings and prompt.
+func New(cfg config.LLMConfig, systemPrompt string) *Analyzer {
 	base := cfg.BaseURL
 	if base == "" {
 		switch cfg.Provider {
@@ -40,9 +42,10 @@ func New(cfg config.LLMConfig) *Analyzer {
 		}
 	}
 	return &Analyzer{
-		baseURL: base,
-		client:  httpclient.NewClient(120 * time.Second),
-		cfg:     cfg,
+		baseURL:      base,
+		client:       httpclient.NewClient(120 * time.Second),
+		cfg:          cfg,
+		systemPrompt: systemPrompt,
 	}
 }
 
@@ -66,15 +69,25 @@ func (a *Analyzer) analyze(ctx context.Context, report *aggregator.Report) (stri
 		return "", fmt.Errorf("marshaling report: %w", err)
 	}
 
-	prompt := fmt.Sprintf(
-		"You are a senior engineer analyzing error patterns from multiple sources. "+
-			"Here are the grouped errors from the last %s. "+
-			"For each group, explain what might be happening, identify possible root causes, "+
-			"and suggest investigation steps. Prioritize by business impact.\n\n%s",
-		report.TimeWindow, string(reportJSON),
+	// Serialize raw records (capped to avoid exceeding token limits).
+	records := report.RawRecords
+	if len(records) > maxRawRecords {
+		records = records[:maxRawRecords]
+	}
+	recordsJSON, err := json.MarshalIndent(records, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshaling raw records: %w", err)
+	}
+
+	userMessage := fmt.Sprintf(
+		"Time window: %s\n\n## Aggregated Report\n```json\n%s\n```\n\n## Raw Error Records (%d of %d)\n```json\n%s\n```",
+		report.TimeWindow,
+		string(reportJSON),
+		len(records), len(report.RawRecords),
+		string(recordsJSON),
 	)
 
-	body, err := a.buildRequestBody(prompt)
+	body, err := a.buildRequestBody(a.systemPrompt, userMessage)
 	if err != nil {
 		return "", fmt.Errorf("building request: %w", err)
 	}
@@ -103,15 +116,27 @@ func (a *Analyzer) analyze(ctx context.Context, report *aggregator.Report) (stri
 	return a.parseResponse(respBody)
 }
 
-func (a *Analyzer) buildRequestBody(prompt string) ([]byte, error) {
-	payload := map[string]any{
-		"model":      a.cfg.Model,
-		"max_tokens": 4096,
-		"messages": []map[string]string{
-			{"role": "user", "content": prompt},
-		},
+func (a *Analyzer) buildRequestBody(systemPrompt, userMessage string) ([]byte, error) {
+	switch a.cfg.Provider {
+	case "openai":
+		return json.Marshal(map[string]any{
+			"model":      a.cfg.Model,
+			"max_tokens": 4096,
+			"messages": []map[string]string{
+				{"role": "system", "content": systemPrompt},
+				{"role": "user", "content": userMessage},
+			},
+		})
+	default: // anthropic
+		return json.Marshal(map[string]any{
+			"model":      a.cfg.Model,
+			"max_tokens": 4096,
+			"system":     systemPrompt,
+			"messages": []map[string]string{
+				{"role": "user", "content": userMessage},
+			},
+		})
 	}
-	return json.Marshal(payload)
 }
 
 func (a *Analyzer) setHeaders(req *http.Request) {

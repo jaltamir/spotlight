@@ -1,5 +1,6 @@
 /spotlight
 spotlight.yaml
+spotlight-prompt.md
 .env
 tmp.txt
 reports/

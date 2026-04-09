@@ -71,7 +71,7 @@ func TestHTMLWriterWrite(t *testing.T) {
 
 func TestHTMLWriterWithAnalysis(t *testing.T) {
 	dir := t.TempDir()
-	analysis := "Root cause: database connection pool exhausted.\nAction: increase pool size."
+	analysis := "## Root Cause\n\nDatabase connection pool **exhausted**.\n\n### Action\n\nIncrease pool size."
 	report := &aggregator.Report{
 		GeneratedAt: "2026-04-05T12:00:00Z",
 		TimeWindow:  "1h",
@@ -91,12 +91,15 @@ func TestHTMLWriterWithAnalysis(t *testing.T) {
 	if !strings.Contains(html, "AI Analysis") {
 		t.Error("missing analysis section")
 	}
-	if !strings.Contains(html, "database connection pool") {
+	if !strings.Contains(html, "Database connection pool") {
 		t.Error("missing analysis content")
 	}
-	// Newlines should be converted to <br>.
-	if !strings.Contains(html, "<br>") {
-		t.Error("newlines should be converted to <br>")
+	// Markdown should be rendered as HTML.
+	if !strings.Contains(html, "<h2>") {
+		t.Error("markdown h2 should be rendered as HTML <h2>")
+	}
+	if !strings.Contains(html, "<strong>") {
+		t.Error("markdown bold should be rendered as <strong>")
 	}
 }
 

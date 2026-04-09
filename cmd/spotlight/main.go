@@ -21,6 +21,7 @@ import (
 	"github.com/jaltamir/spotlight/internal/enricher"
 	"github.com/jaltamir/spotlight/internal/log"
 	"github.com/jaltamir/spotlight/internal/output"
+	"github.com/jaltamir/spotlight/internal/prompt"
 	"github.com/jaltamir/spotlight/internal/version"
 )
 
@@ -134,6 +135,7 @@ func main() {
 			}
 
 			report := aggregator.Aggregate(currentRecords, previousRecords, cfg.TimeWindow)
+			report.RawRecords = currentRecords
 			log.Infof("Found %d errors in %d group(s)", report.TotalErrors, len(report.Groups))
 
 			// Run enrichers (e.g. LLM analysis).
@@ -144,6 +146,7 @@ func main() {
 					log.Warn(e.Name(), err)
 				}
 			}
+			report.RawRecords = nil // free memory before writers
 
 			// Run all enabled output writers.
 			ts := now.Format("2006-01-02T150405Z")
@@ -204,7 +207,12 @@ func buildEnrichers(cfg *config.Config) []enricher.Enricher {
 		}
 		switch ec.Name {
 		case "llm":
-			enrichers = append(enrichers, analyzer.New(cfg.LLM))
+			promptText, err := prompt.Load(cfg.LLM.PromptFile)
+			if err != nil {
+				log.Warn("llm prompt", err)
+				continue
+			}
+			enrichers = append(enrichers, analyzer.New(cfg.LLM, promptText))
 		}
 	}
 	return enrichers

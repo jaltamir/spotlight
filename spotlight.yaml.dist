@@ -55,3 +55,4 @@ llm:
   api_key: "${ANTHROPIC_API_KEY}"
   model: "claude-sonnet-4-6"
   # base_url: ""                    # optional: custom endpoint (Azure, proxy, ollama)
+  # prompt_file: ""                 # optional: explicit path to prompt file

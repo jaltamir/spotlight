@@ -30,6 +30,10 @@ type Report struct {
 	TotalErrors int     `json:"total_errors"`
 	Groups      []Group `json:"groups"`
 	Analysis    *string `json:"analysis"`
+
+	// RawRecords carries the original error records through the pipeline
+	// for enrichers that need per-record detail. Excluded from JSON output.
+	RawRecords []connector.ErrorRecord `json:"-"`
 }
 
 type groupKey struct {

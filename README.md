@@ -218,6 +218,24 @@ Groups are sorted by impact score: `count * trend_weight` (rising=3, stable=1, f
 
 Enable the `llm` enricher in the `enrichers:` section to send the grouped report to an LLM for interpretation. Supports both Anthropic (Claude) and OpenAI. Configure the provider, API key, and model in the `llm:` section. Defaults to Anthropic with `claude-sonnet-4-6`.
 
+The LLM receives both the aggregated report and raw error records, allowing it to correlate errors across sources and trace end-to-end flows. The response is rendered as markdown in the HTML report.
+
+### Prompt customization
+
+The LLM system prompt is loaded with a fallback chain:
+
+1. `llm.prompt_file` in config (explicit path) — if set, must exist
+2. `spotlight-prompt.md` (custom, gitignored) — your project-specific prompt
+3. `spotlight-prompt.dist.md` (versioned default) — generic analysis prompt
+4. Hardcoded fallback — always works even without files
+
+To customize the analysis, copy the dist file and edit:
+
+```bash
+cp spotlight-prompt.dist.md spotlight-prompt.md
+# Edit spotlight-prompt.md with your domain-specific instructions
+```
+
 ## Project structure
 
 ```
@@ -234,6 +252,7 @@ spotlight/
 │   ├── enricher/
 │   │   └── enricher.go      # Enricher interface
 │   ├── analyzer/            # LLM enricher (Anthropic + OpenAI)
+│   ├── prompt/              # Prompt file loader (fallback chain)
 │   ├── httpclient/          # HTTP client with retry + backoff
 │   ├── log/                 # Hybrid logging facade
 │   ├── version/             # Build version injection
@@ -243,6 +262,7 @@ spotlight/
 │       ├── html.go          # HTML report
 │       └── s3.go            # S3 upload
 ├── Makefile                 # Build with ldflags, test, clean
+├── spotlight-prompt.dist.md # Default LLM prompt (versioned)
 ├── spotlight.yaml.dist      # Example config (versioned)
 ├── .env                     # API keys (gitignored)
 └── spotlight.yaml           # Local config (gitignored)

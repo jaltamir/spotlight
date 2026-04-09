@@ -1,12 +1,15 @@
 package output
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"html/template"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/yuin/goldmark"
 
 	"github.com/jaltamir/spotlight/internal/aggregator"
 )
@@ -151,11 +154,23 @@ const htmlTemplate = `<!DOCTYPE html>
     border-radius: 8px;
     padding: 1.5rem;
     margin-top: 2rem;
-    white-space: pre-wrap;
     font-size: 0.9rem;
     line-height: 1.7;
   }
-  .analysis h2 { font-size: 1.1rem; margin-bottom: 1rem; }
+  .analysis h1, .analysis h2, .analysis h3 { margin-top: 1.2rem; margin-bottom: 0.5rem; }
+  .analysis h1 { font-size: 1.3rem; }
+  .analysis h2 { font-size: 1.1rem; }
+  .analysis h3 { font-size: 1rem; color: var(--text-dim); }
+  .analysis ul, .analysis ol { margin-left: 1.5rem; margin-bottom: 0.75rem; }
+  .analysis li { margin-bottom: 0.25rem; }
+  .analysis p { margin-bottom: 0.75rem; }
+  .analysis code { background: var(--bg); padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.85em; }
+  .analysis pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; overflow-x: auto; margin-bottom: 0.75rem; }
+  .analysis pre code { background: none; padding: 0; }
+  .analysis strong { color: var(--accent); }
+  .analysis table { width: 100%; border-collapse: collapse; margin-bottom: 0.75rem; }
+  .analysis th, .analysis td { padding: 0.4rem 0.75rem; border: 1px solid var(--border); text-align: left; }
+  .analysis th { background: var(--badge-bg); }
   .chevron {
     color: var(--text-dim);
     transition: transform 0.2s;
@@ -280,10 +295,15 @@ func writeHTML(report *aggregator.Report, path string) error {
 
 	var analysisHTML template.HTML
 	if report.Analysis != nil {
-		// Escape but preserve newlines as <br>.
-		escaped := template.HTMLEscapeString(*report.Analysis)
-		escaped = strings.ReplaceAll(escaped, "\n", "<br>")
-		analysisHTML = template.HTML(escaped)
+		var buf bytes.Buffer
+		if err := goldmark.Convert([]byte(*report.Analysis), &buf); err != nil {
+			// Fallback to escaped plain text if markdown parsing fails.
+			escaped := template.HTMLEscapeString(*report.Analysis)
+			escaped = strings.ReplaceAll(escaped, "\n", "<br>")
+			analysisHTML = template.HTML(escaped)
+		} else {
+			analysisHTML = template.HTML(buf.String())
+		}
 	}
 
 	v := view{

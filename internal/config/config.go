@@ -49,10 +49,11 @@ type S3Config struct {
 }
 
 type LLMConfig struct {
-	Provider string `yaml:"provider"`
-	APIKey   string `yaml:"api_key"`
-	Model    string `yaml:"model"`
-	BaseURL  string `yaml:"base_url"`
+	Provider   string `yaml:"provider"`
+	APIKey     string `yaml:"api_key"`
+	Model      string `yaml:"model"`
+	BaseURL    string `yaml:"base_url"`
+	PromptFile string `yaml:"prompt_file"`
 }
 
 var envVarPattern = regexp.MustCompile(`\$\{([^}]+)\}`)
