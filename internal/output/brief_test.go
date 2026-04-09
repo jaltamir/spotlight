@@ -48,6 +48,9 @@ func TestBriefWriterWrite(t *testing.T) {
 	if !strings.Contains(md, "## Instructions") {
 		t.Error("missing instructions section")
 	}
+	if !strings.Contains(md, "# Data") {
+		t.Error("missing data separator")
+	}
 	if !strings.Contains(md, "## Aggregated Report") {
 		t.Error("missing aggregated report section")
 	}

@@ -49,6 +49,8 @@ func (w *BriefWriter) Write(_ context.Context, report *aggregator.Report, outDir
 	content := fmt.Sprintf(
 		"# Spotlight Action Brief — %s\n\n"+
 			"## Instructions\n\n%s\n\n"+
+			"---\n\n"+
+			"# Data\n\n"+
 			"## Aggregated Report\n\n```json\n%s\n```\n\n"+
 			"## Raw Error Records (%d of %d)\n\n```json\n%s\n```\n",
 		timestamp,
