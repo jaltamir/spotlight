@@ -87,28 +87,55 @@ func TestValidateInvalidTimeWindow(t *testing.T) {
 	}
 }
 
-func TestValidateLLMEnricherWithoutKey(t *testing.T) {
+func TestValidateLLMProcessorWithoutKey(t *testing.T) {
 	cfg := validConfig()
-	cfg.Enrichers = []EnricherConfig{{Name: "llm", Enabled: true}}
+	cfg.Processors = []ProcessorConfig{{Name: "llm", Enabled: true}}
 	cfg.LLM = LLMConfig{Provider: "anthropic", APIKey: ""}
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for llm enricher without api_key")
+		t.Fatal("expected error for llm processor without api_key")
 	}
 }
 
-func TestValidateLLMEnricherUnknownProvider(t *testing.T) {
+func TestValidateLLMProcessorUnknownProvider(t *testing.T) {
 	cfg := validConfig()
-	cfg.Enrichers = []EnricherConfig{{Name: "llm", Enabled: true}}
+	cfg.Processors = []ProcessorConfig{{Name: "llm", Enabled: true}}
 	cfg.LLM = LLMConfig{Provider: "gemini", APIKey: "key"}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected error for unknown provider")
 	}
 }
 
-func TestValidateLLMEnricherValid(t *testing.T) {
+func TestValidateLLMProcessorValid(t *testing.T) {
 	cfg := validConfig()
-	cfg.Enrichers = []EnricherConfig{{Name: "llm", Enabled: true}}
+	cfg.Processors = []ProcessorConfig{{Name: "llm", Enabled: true}}
 	cfg.LLM = LLMConfig{Provider: "openai", APIKey: "key", Model: "gpt-4o"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestValidateLLMAndBriefMutuallyExclusive(t *testing.T) {
+	cfg := validConfig()
+	cfg.Processors = []ProcessorConfig{{Name: "llm", Enabled: true}}
+	cfg.LLM = LLMConfig{Provider: "anthropic", APIKey: "key", Model: "m"}
+	cfg.Outputs = append(cfg.Outputs, OutputConfig{Name: "brief", Enabled: true})
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for llm processor + brief output both enabled")
+	}
+}
+
+func TestValidateLLMOnlyOk(t *testing.T) {
+	cfg := validConfig()
+	cfg.Processors = []ProcessorConfig{{Name: "llm", Enabled: true}}
+	cfg.LLM = LLMConfig{Provider: "anthropic", APIKey: "key", Model: "m"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+}
+
+func TestValidateBriefOnlyOk(t *testing.T) {
+	cfg := validConfig()
+	cfg.Outputs = append(cfg.Outputs, OutputConfig{Name: "brief", Enabled: true})
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -150,7 +177,7 @@ connectors:
   - name: hubspot
     enabled: false
     api_key: "hs-key"
-enrichers:
+processors:
   - name: llm
     enabled: true
 outputs:
@@ -189,8 +216,8 @@ llm:
 	if cfg.LLM.Provider != "anthropic" {
 		t.Errorf("expected default provider=anthropic, got %s", cfg.LLM.Provider)
 	}
-	if len(cfg.Enrichers) != 1 || cfg.Enrichers[0].Name != "llm" || !cfg.Enrichers[0].Enabled {
-		t.Errorf("expected 1 enabled llm enricher, got %v", cfg.Enrichers)
+	if len(cfg.Processors) != 1 || cfg.Processors[0].Name != "llm" || !cfg.Processors[0].Enabled {
+		t.Errorf("expected 1 enabled llm processor, got %v", cfg.Processors)
 	}
 }
 

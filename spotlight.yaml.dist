@@ -23,8 +23,8 @@ connectors:
   #   applications:                       # environment filter (optional)
   #     - "production"
 
-# --- Enrichers (run between aggregation and output) ---
-enrichers:
+# --- Processors (run between aggregation and output) ---
+processors:
   - name: llm
     enabled: false
     # LLM settings are configured in the llm: section below.
@@ -39,6 +39,11 @@ outputs:
     enabled: true
     path: "./reports"
 
+  - name: brief
+    enabled: false
+    # Generates a self-contained .md with prompt + data for external AI agents.
+    # Cannot be enabled together with the llm processor.
+
   - name: s3
     enabled: false
     s3:
@@ -49,7 +54,7 @@ outputs:
       prefix: "reports/"
       retain_last: 30
 
-# --- LLM settings (used by the llm enricher) ---
+# --- LLM settings (used by the llm processor) ---
 llm:
   provider: "anthropic"             # "anthropic" | "openai"
   api_key: "${ANTHROPIC_API_KEY}"

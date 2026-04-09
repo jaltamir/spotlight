@@ -22,7 +22,7 @@ const (
 )
 
 // Analyzer sends grouped reports to an LLM API for analysis.
-// It implements the enricher.Enricher interface.
+// It implements the processor.Processor interface.
 type Analyzer struct {
 	baseURL      string
 	client       *http.Client
@@ -49,12 +49,12 @@ func New(cfg config.LLMConfig, systemPrompt string) *Analyzer {
 	}
 }
 
-// Name implements enricher.Enricher.
+// Name implements processor.Processor.
 func (a *Analyzer) Name() string { return "llm" }
 
-// Enrich implements enricher.Enricher. It calls the LLM API and
+// Process implements processor.Processor. It calls the LLM API and
 // sets report.Analysis.
-func (a *Analyzer) Enrich(ctx context.Context, report *aggregator.Report) error {
+func (a *Analyzer) Process(ctx context.Context, report *aggregator.Report) error {
 	text, err := a.analyze(ctx, report)
 	if err != nil {
 		return err

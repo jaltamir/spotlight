@@ -13,12 +13,12 @@ import (
 type Config struct {
 	TimeWindow string            `yaml:"time_window"`
 	Connectors []ConnectorConfig `yaml:"connectors"`
-	Enrichers  []EnricherConfig  `yaml:"enrichers"`
+	Processors  []ProcessorConfig  `yaml:"processors"`
 	Outputs    []OutputConfig    `yaml:"outputs"`
 	LLM        LLMConfig         `yaml:"llm"`
 }
 
-type EnricherConfig struct {
+type ProcessorConfig struct {
 	Name    string `yaml:"name"`
 	Enabled bool   `yaml:"enabled"`
 }
@@ -156,18 +156,35 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("at least one output must be enabled")
 	}
 
-	for _, ec := range c.Enrichers {
+	for _, ec := range c.Processors {
 		if !ec.Enabled {
 			continue
 		}
 		if ec.Name == "llm" {
 			if c.LLM.APIKey == "" {
-				return fmt.Errorf("enricher llm: api_key is required in llm config")
+				return fmt.Errorf("processor llm: api_key is required in llm config")
 			}
 			if c.LLM.Provider != "anthropic" && c.LLM.Provider != "openai" {
-				return fmt.Errorf("enricher llm: unknown provider %q (expected \"anthropic\" or \"openai\")", c.LLM.Provider)
+				return fmt.Errorf("processor llm: unknown provider %q (expected \"anthropic\" or \"openai\")", c.LLM.Provider)
 			}
 		}
+	}
+
+	// Mutual exclusion: processor LLM and output brief cannot both be enabled.
+	llmProcessor := false
+	for _, pc := range c.Processors {
+		if pc.Name == "llm" && pc.Enabled {
+			llmProcessor = true
+		}
+	}
+	briefWriter := false
+	for _, oc := range c.Outputs {
+		if oc.Name == "brief" && oc.Enabled {
+			briefWriter = true
+		}
+	}
+	if llmProcessor && briefWriter {
+		return fmt.Errorf("processor llm and output brief cannot both be enabled")
 	}
 
 	return nil

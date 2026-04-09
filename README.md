@@ -4,20 +4,20 @@ CLI tool that connects to your APMs and integrations, groups errors by pattern, 
 
 ## What it does
 
-Spotlight collects errors from multiple data sources in parallel, groups them by pattern (source, service, endpoint, error type), calculates trends against the previous time window, and outputs structured reports. Optionally, enrichers can transform the report before output — for example, sending it to an LLM (Claude or OpenAI) for AI-powered root cause analysis.
+Spotlight collects errors from multiple data sources in parallel, groups them by pattern (source, service, endpoint, error type), calculates trends against the previous time window, and outputs structured reports. Optionally, processors can transform the report before output — for example, sending it to an LLM (Claude or OpenAI) for AI-powered root cause analysis.
 
 ## Architecture
 
 ```
                     ┌────────────┐   ┌─────────┐
   newrelic ─┐       │ group +    │   │   llm   │       ┌─ json
-            ├──────▶│ rank by    │──▶│         │──────▶├─ html
-  hubspot ──┘       │ impact     │   │ dedup,… │       └─ s3
-                    └────────────┘   └─────────┘
-  connectors         aggregator       enrichers         writers
+  hubspot  ─┼──────▶│ rank by    │──▶│         │──────▶├─ html
+  rollbar  ─┘       │ impact     │   └─────────┘       ├─ brief
+                    └────────────┘                      └─ s3
+  connectors         aggregator       processors         writers
 ```
 
-Connectors, enrichers, and writers each implement a simple interface and are configured in `spotlight.yaml`. The pipeline runs sequentially: **collect → aggregate → enrich → write**.
+Connectors, processors, and writers each implement a simple interface and are configured in `spotlight.yaml`. The pipeline runs sequentially: **collect → aggregate → process → write**.
 
 ## Quick start
 
@@ -72,8 +72,8 @@ connectors:
     enabled: true
     api_key: "${HUBSPOT_API_KEY}"
 
-# --- Enrichers (run between aggregation and output) ---
-enrichers:
+# --- Processors (run between aggregation and output) ---
+processors:
   - name: llm
     enabled: false
 
@@ -97,7 +97,7 @@ outputs:
       prefix: "reports/"
       retain_last: 30
 
-# --- LLM settings (used by the llm enricher) ---
+# --- LLM settings (used by the llm processor) ---
 llm:
   provider: "anthropic"   # "anthropic" | "openai"
   api_key: "${ANTHROPIC_API_KEY}"
@@ -132,30 +132,31 @@ The HubSpot Private App token needs these scopes:
 |--------|-----------------|
 | **json** | `reports/spotlight-{timestamp}.json` |
 | **html** | `reports/spotlight-{timestamp}.html` — dark theme, expandable groups, trend badges |
+| **brief** | `reports/spotlight-brief-{timestamp}.md` — self-contained action brief for external AI agents |
 | **s3** | Uploads JSON to S3 with timestamped key and optional retention pruning |
 
 The output directory is cleaned at the start of each run.
 
-## Enrichers
+## Processors
 
-Enrichers run between aggregation and output, transforming the report in place.
+Processors run between aggregation and output, transforming the report in place.
 
-| Enricher | What it does |
+| Processor | What it does |
 |----------|-------------|
 | **llm** | Sends the grouped report to an LLM API (Anthropic or OpenAI) for root cause analysis |
 
-## Adding a new enricher
+## Adding a new processor
 
-Implement the `Enricher` interface:
+Implement the `Processor` interface:
 
 ```go
-type Enricher interface {
+type Processor interface {
     Name() string
-    Enrich(ctx context.Context, report *aggregator.Report) error
+    Process(ctx context.Context, report *aggregator.Report) error
 }
 ```
 
-Register it in `buildEnrichers()` in `cmd/spotlight/main.go`.
+Register it in `buildProcessors()` in `cmd/spotlight/main.go`.
 
 ## Adding a new input connector
 
@@ -216,7 +217,7 @@ Groups are sorted by impact score: `count * trend_weight` (rising=3, stable=1, f
 
 ## AI analysis
 
-Enable the `llm` enricher in the `enrichers:` section to send the grouped report to an LLM for interpretation. Supports both Anthropic (Claude) and OpenAI. Configure the provider, API key, and model in the `llm:` section. Defaults to Anthropic with `claude-sonnet-4-6`.
+Enable the `llm` processor in the `processors:` section to send the grouped report to an LLM for interpretation. Supports both Anthropic (Claude) and OpenAI. Configure the provider, API key, and model in the `llm:` section. Defaults to Anthropic with `claude-sonnet-4-6`.
 
 The LLM receives both the aggregated report and raw error records, allowing it to correlate errors across sources and trace end-to-end flows. The response is rendered as markdown in the HTML report.
 
@@ -249,9 +250,9 @@ spotlight/
 │   │   ├── newrelic/        # New Relic NerdGraph connector
 │   │   └── hubspot/         # HubSpot CRM/audit/usage connector
 │   ├── aggregator/          # Grouping, trend calculation, ranking
-│   ├── enricher/
-│   │   └── enricher.go      # Enricher interface
-│   ├── analyzer/            # LLM enricher (Anthropic + OpenAI)
+│   ├── processor/
+│   │   └── processor.go     # Processor interface
+│   ├── analyzer/            # LLM processor (Anthropic + OpenAI)
 │   ├── prompt/              # Prompt file loader (fallback chain)
 │   ├── httpclient/          # HTTP client with retry + backoff
 │   ├── log/                 # Hybrid logging facade

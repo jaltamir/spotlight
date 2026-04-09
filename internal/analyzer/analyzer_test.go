@@ -78,7 +78,7 @@ func TestEnrichAnthropic(t *testing.T) {
 	a := newTestAnalyzer(srv, "anthropic")
 	report := &aggregator.Report{TimeWindow: "24h", TotalErrors: 10}
 
-	if err := a.Enrich(context.Background(), report); err != nil {
+	if err := a.Process(context.Background(), report); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if report.Analysis == nil || !strings.Contains(*report.Analysis, "Database overload") {
@@ -109,7 +109,7 @@ func TestEnrichOpenAI(t *testing.T) {
 	a := newTestAnalyzer(srv, "openai")
 	report := &aggregator.Report{TimeWindow: "1h"}
 
-	if err := a.Enrich(context.Background(), report); err != nil {
+	if err := a.Process(context.Background(), report); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if report.Analysis == nil || *report.Analysis != "OpenAI analysis." {
@@ -141,7 +141,7 @@ func TestEnrichIncludesRawRecords(t *testing.T) {
 		},
 	}
 
-	if err := a.Enrich(context.Background(), report); err != nil {
+	if err := a.Process(context.Background(), report); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -169,7 +169,7 @@ func TestEnrichTruncatesRawRecords(t *testing.T) {
 	}
 	report := &aggregator.Report{TimeWindow: "1h", RawRecords: records}
 
-	a.Enrich(context.Background(), report)
+	a.Process(context.Background(), report)
 	if recordCount != 1 {
 		t.Error("expected exactly 1 API call")
 	}
@@ -185,7 +185,7 @@ func TestEnrichHTTP500(t *testing.T) {
 	a := newTestAnalyzer(srv, "anthropic")
 	report := &aggregator.Report{TimeWindow: "1h"}
 
-	err := a.Enrich(context.Background(), report)
+	err := a.Process(context.Background(), report)
 	if err == nil {
 		t.Fatal("expected error for HTTP 500")
 	}
@@ -200,7 +200,7 @@ func TestEnrichEmptyResponse(t *testing.T) {
 	a := newTestAnalyzer(srv, "anthropic")
 	report := &aggregator.Report{TimeWindow: "1h"}
 
-	err := a.Enrich(context.Background(), report)
+	err := a.Process(context.Background(), report)
 	if err == nil {
 		t.Fatal("expected error for empty content")
 	}
@@ -213,7 +213,7 @@ func TestEnrichCancelledContext(t *testing.T) {
 	a := New(config.LLMConfig{Provider: "anthropic", APIKey: "key", Model: "model"}, "prompt")
 	report := &aggregator.Report{TimeWindow: "1h"}
 
-	if err := a.Enrich(ctx, report); err == nil {
+	if err := a.Process(ctx, report); err == nil {
 		t.Fatal("expected error with cancelled context")
 	}
 }

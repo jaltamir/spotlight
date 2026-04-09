@@ -32,7 +32,7 @@ type Report struct {
 	Analysis    *string `json:"analysis"`
 
 	// RawRecords carries the original error records through the pipeline
-	// for enrichers that need per-record detail. Excluded from JSON output.
+	// for processors and writers that need per-record detail. Excluded from JSON output.
 	RawRecords []connector.ErrorRecord `json:"-"`
 }
 
